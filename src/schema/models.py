@@ -49,6 +49,7 @@ class TraversalStep:
     edge_label: str | None  # Predicate used to reach this node
     from_node_id: str | None  # Previous node
     community_id: int | None
+    depth: int = 0  # Hop depth from seed node
     chunk_ids: list[str] = field(default_factory=list)
     score: float = 0.0
 
@@ -65,6 +66,7 @@ class TraversalTrace:
     visited_edges: list[tuple[str, str, str]] = field(default_factory=list)  # (from, to, predicate)
     visited_communities: set[int] = field(default_factory=set)
     collected_chunk_ids: list[str] = field(default_factory=list)
+    max_depth: int = 0  # Track max hop depth reached
 
     def add_step(self, step: TraversalStep):
         self.steps.append(step)
@@ -77,6 +79,12 @@ class TraversalTrace:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for API/WebSocket response."""
+        # Calculate max depth from steps (use depth field if available, else calculate)
+        max_depth = 0
+        if self.steps:
+            for step in self.steps:
+                max_depth = max(max_depth, step.depth)
+        
         return {
             "query": self.query,
             "seed_chunks": self.seed_chunks,
@@ -98,6 +106,8 @@ class TraversalTrace:
             "visited_edges": [
                 {"from": e[0], "to": e[1], "predicate": e[2]} for e in self.visited_edges
             ],
+            "edges_traversed": len(self.visited_edges),
+            "hops": max_depth,
             "visited_communities": list(self.visited_communities),
             "chunk_count": len(set(self.collected_chunk_ids)),
         }

@@ -1,0 +1,38 @@
+[project]
+name = "philosiphai"
+version = "0.2.0"
+description = "Knowledge Graph RAG with Community Routing"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=1.0.0",
+    "networkx>=3.0",
+    "openai>=1.0.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "spacy>=3.7.0",
+    "tqdm>=4.65.0",
+    "leidenalg>=0.10.0",
+    "python-igraph>=0.11.0",
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "websockets>=12.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+philosiphai-ingest = "src.ingest.cli:main"
+philosiphai-server = "src.api.main:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]

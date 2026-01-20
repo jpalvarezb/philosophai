@@ -168,3 +168,41 @@ class AgentTools:
                 data=None,
                 message=str(e),
             )
+
+    def sequential_thinking(
+        self,
+        thought: str,
+        thought_number: int,
+        total_thoughts: int,
+        next_thought_needed: bool,
+        is_revision: bool = False,
+        revises_thought: int | None = None,
+        branch_from_thought: int | None = None,
+        branch_id: str | None = None,
+        needs_more_thoughts: bool = False,
+    ) -> ToolResult:
+        """
+        Record a step in the sequential thinking process.
+        
+        This tool allows the agent to structure its reasoning, revise previous thoughts,
+        and branch out into different lines of inquiry.
+        """
+        # Adjust total thoughts if we exceeded the estimate
+        if thought_number > total_thoughts:
+            total_thoughts = thought_number
+            
+        return ToolResult(
+            tool_name="sequential_thinking",
+            success=True,
+            data={
+                "thought": thought,
+                "thought_number": thought_number,
+                "total_thoughts": total_thoughts,
+                "next_thought_needed": next_thought_needed or needs_more_thoughts,
+                "is_revision": is_revision,
+                "revises_thought": revises_thought,
+                "branch_from_thought": branch_from_thought,
+                "branch_id": branch_id,
+            },
+            message=f"Thought {thought_number}/{total_thoughts} recorded.",
+        )

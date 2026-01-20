@@ -19,6 +19,15 @@ class VectorSearchResult:
     query_embedding: list[float]
 
 
+@dataclass
+class CommunityReportSearchResult:
+    """Result from community report search (GraphRAG routing)."""
+    community_ids: list[int]  # Matched community IDs
+    scores: list[float]  # Similarity scores
+    cited_chunk_ids: list[str]  # Chunks cited in matched reports
+    query_embedding: list[float]
+
+
 class VectorSearch:
     """Perform vector similarity search on chunks and community summaries."""
 
@@ -96,3 +105,39 @@ class VectorSearch:
         chunk_ids = [r[0] for r in results]
         scores = [r[1] for r in results]
         return chunk_ids, scores, query_embedding
+
+    def search_community_reports(
+        self,
+        query: str,
+        limit: int = 5,
+    ) -> "CommunityReportSearchResult":
+        """
+        Search community reports for GraphRAG routing.
+        
+        Args:
+            query: Search query
+            limit: Max communities to return
+        
+        Returns:
+            CommunityReportSearchResult with community IDs, scores, and cited chunks
+        """
+        query_embedding = self.get_embedding(query)
+        results = self.storage.vector_search_community_reports(query_embedding, limit=limit)
+        
+        community_ids = []
+        community_scores = []
+        all_cited_chunks = []
+        
+        for row in results:
+            comm_id, score, cited_chunks = row
+            community_ids.append(comm_id)
+            community_scores.append(score)
+            if cited_chunks:
+                all_cited_chunks.extend(cited_chunks)
+        
+        return CommunityReportSearchResult(
+            community_ids=community_ids,
+            scores=community_scores,
+            cited_chunk_ids=list(set(all_cited_chunks)),
+            query_embedding=query_embedding,
+        )

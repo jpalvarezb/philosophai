@@ -59,6 +59,7 @@ class GraphTraverser:
         max_hops: int = 2,
         max_nodes: int = 50,
         max_cross_community_hops: int = 1,
+        restrict_to_communities: bool = False,
     ) -> "TraversalTrace":
         """
         Perform best-first traversal from seed nodes.
@@ -69,6 +70,7 @@ class GraphTraverser:
             max_hops: Maximum depth from any seed
             max_nodes: Stop after visiting this many nodes
             max_cross_community_hops: Limit hops outside target communities
+            restrict_to_communities: If True, strictly stay within target communities (GraphRAG mode)
         
         Returns:
             TraversalTrace with visited nodes, edges, and collected chunks
@@ -89,6 +91,9 @@ class GraphTraverser:
         for node_id in seed_nodes:
             if node_id in self.graph:
                 community_id = self.node_to_community.get(node_id)
+                # In strict mode, skip seeds not in target communities (unless no targets)
+                if restrict_to_communities and target_set and community_id not in target_set:
+                    continue
                 score = self._score_node(node_id, None, target_set, 0)
                 heapq.heappush(
                     heap,
@@ -113,6 +118,9 @@ class GraphTraverser:
 
             # Check cross-community limit
             if current.community_id is not None and current.community_id not in target_set:
+                if restrict_to_communities:
+                    # Strict mode: skip all nodes outside target communities
+                    continue
                 if cross_community_count >= max_cross_community_hops:
                     continue
                 cross_community_count += 1
@@ -134,6 +142,7 @@ class GraphTraverser:
                 edge_label=current.edge_label,
                 from_node_id=current.from_node_id,
                 community_id=current.community_id,
+                depth=current.depth,
                 chunk_ids=edge_chunks,
                 score=current.score,
             )
@@ -148,6 +157,7 @@ class GraphTraverser:
                     target_set,
                     visited,
                     heap,
+                    restrict_to_communities,
                 )
 
         return trace
@@ -186,6 +196,7 @@ class GraphTraverser:
         target_communities: set[int],
         visited: set[str],
         heap: list[ScoredNode],
+        restrict_to_communities: bool = False,
     ):
         """Add neighbors of node to the heap."""
         if node_id not in self.graph:
@@ -195,6 +206,12 @@ class GraphTraverser:
             if neighbor_id in visited:
                 continue
 
+            neighbor_community = self.node_to_community.get(neighbor_id)
+            
+            # In strict mode, only expand to nodes within target communities
+            if restrict_to_communities and target_communities and neighbor_community not in target_communities:
+                continue
+
             # Get best edge to this neighbor
             edges = self.graph[node_id][neighbor_id]
             best_edge_key = max(edges.keys(), key=lambda k: edges[k].get("weight", 1))
@@ -202,7 +219,6 @@ class GraphTraverser:
             edge_weight = edge_data.get("weight", 1)
             edge_label = edge_data.get("label", best_edge_key)
 
-            neighbor_community = self.node_to_community.get(neighbor_id)
             score = self._score_node(neighbor_id, edge_weight, target_communities, current_depth + 1)
 
             heapq.heappush(

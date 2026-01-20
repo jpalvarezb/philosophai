@@ -27,6 +27,13 @@ class TraceRecorder:
     total_chunks_retrieved: int = 0
     communities_explored: list[int] = field(default_factory=list)
     nodes_visited: list[str] = field(default_factory=list)
+    
+    # Phase 3: Enhanced trace fields for GraphRAG routing
+    selected_community_ids: list[int] = field(default_factory=list)  # Communities from report search
+    community_report_scores: dict[int, float] = field(default_factory=dict)  # comm_id -> score
+    seed_entities: list[str] = field(default_factory=list)  # Seed nodes used for traversal
+    final_cited_chunk_ids: list[str] = field(default_factory=list)  # Chunks in final answer
+    paths: list[dict] = field(default_factory=list)  # Traversal paths: [{node_ids: [], edge_labels: []}]
 
     def add_thought(
         self,
@@ -70,8 +77,16 @@ class TraceRecorder:
             "stats": {
                 "total_chunks": self.total_chunks_retrieved,
                 "communities_explored": self.communities_explored,
-                "nodes_visited_count": len(self.nodes_visited),
+                "nodes_visited_count": len(set(self.nodes_visited)),
             },
+            # Phase 3: GraphRAG routing trace
+            "routing": {
+                "selected_communities": self.selected_community_ids,
+                "community_scores": self.community_report_scores,
+                "seed_entities": self.seed_entities[:20],  # Cap for readability
+                "final_cited_chunks": self.final_cited_chunk_ids,
+            },
+            "paths": self.paths,
         }
 
     def get_streaming_events(self) -> list[dict]:

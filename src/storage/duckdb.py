@@ -160,3 +160,144 @@ class DuckDBStorage:
             LIMIT ?
         """
         return self.con.execute(sql, [query_embedding, limit]).fetchall()
+
+    # -------------------------------------------------------------------------
+    # Community Membership (normalized for efficient lookups)
+    # -------------------------------------------------------------------------
+    def ensure_community_membership_table(self):
+        """Create community_membership table if not exists."""
+        self.con.execute("""
+            CREATE TABLE IF NOT EXISTS community_membership (
+                comm_id INTEGER,
+                node_id VARCHAR,
+                weight DOUBLE DEFAULT 1.0,
+                PRIMARY KEY (comm_id, node_id)
+            )
+        """)
+        # Index for node lookups
+        self.con.execute("""
+            CREATE INDEX IF NOT EXISTS idx_membership_node 
+            ON community_membership(node_id)
+        """)
+
+    def populate_community_membership(self):
+        """
+        Populate community_membership from communities.node_ids arrays.
+        Call after running Leiden detection.
+        """
+        self.ensure_community_membership_table()
+        # Clear existing
+        self.con.execute("DELETE FROM community_membership")
+        # Unnest node_ids arrays into normalized rows
+        self.con.execute("""
+            INSERT INTO community_membership (comm_id, node_id, weight)
+            SELECT community_id, UNNEST(node_ids), 1.0
+            FROM communities
+        """)
+        count = self.con.execute("SELECT COUNT(*) FROM community_membership").fetchone()[0]
+        print(f"✅ Populated {count} community membership records")
+
+    def get_nodes_in_communities(self, comm_ids: list[int]) -> list[str]:
+        """Get all node IDs belonging to the given communities."""
+        if not comm_ids:
+            return []
+        placeholders = ",".join(["?"] * len(comm_ids))
+        sql = f"""
+            SELECT DISTINCT node_id 
+            FROM community_membership 
+            WHERE comm_id IN ({placeholders})
+        """
+        results = self.con.execute(sql, comm_ids).fetchall()
+        return [r[0] for r in results]
+
+    def get_chunks_for_communities(self, comm_ids: list[int]) -> list[str]:
+        """
+        Get all chunk IDs associated with entities in the given communities.
+        Uses entity->chunk mapping from triples.
+        """
+        if not comm_ids:
+            return []
+        placeholders = ",".join(["?"] * len(comm_ids))
+        sql = f"""
+            SELECT DISTINCT t.chunk_id
+            FROM normalized_triples_clean_canon t
+            INNER JOIN community_membership m 
+                ON t.subject_canon_id = m.node_id OR t.object_canon_id = m.node_id
+            WHERE m.comm_id IN ({placeholders})
+        """
+        results = self.con.execute(sql, comm_ids).fetchall()
+        return [r[0] for r in results if r[0]]
+
+    def get_community_for_node(self, node_id: str) -> int | None:
+        """Get community ID for a single node."""
+        result = self.con.execute(
+            "SELECT comm_id FROM community_membership WHERE node_id = ? LIMIT 1",
+            [node_id],
+        ).fetchone()
+        return result[0] if result else None
+
+    # -------------------------------------------------------------------------
+    # Community Reports (Phase 3.2)
+    # -------------------------------------------------------------------------
+    def ensure_community_reports_table(self):
+        """Create community_reports table if not exists."""
+        self.con.execute("""
+            CREATE TABLE IF NOT EXISTS community_reports (
+                comm_id INTEGER PRIMARY KEY,
+                report_text TEXT,
+                report_embedding DOUBLE[],
+                cited_chunk_ids VARCHAR[],
+                entity_ids VARCHAR[],
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+    def insert_community_report(
+        self,
+        comm_id: int,
+        report_text: str,
+        report_embedding: list[float] | None = None,
+        cited_chunk_ids: list[str] | None = None,
+        entity_ids: list[str] | None = None,
+    ):
+        """Insert or replace a community report."""
+        self.con.execute(
+            """
+            INSERT OR REPLACE INTO community_reports 
+            (comm_id, report_text, report_embedding, cited_chunk_ids, entity_ids, created_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            [comm_id, report_text, report_embedding, cited_chunk_ids or [], entity_ids or []],
+        )
+
+    def get_community_reports(self) -> pd.DataFrame:
+        """Fetch all community reports."""
+        try:
+            return self.con.execute("SELECT * FROM community_reports").fetchdf()
+        except Exception:
+            # Table doesn't exist yet
+            import pandas as pd
+            return pd.DataFrame()
+
+    def vector_search_community_reports(
+        self, query_embedding: list[float], limit: int = 5
+    ) -> list[tuple[int, float, list[str]]]:
+        """
+        Find top-k community reports by embedding similarity.
+        Returns: list of (comm_id, score, cited_chunk_ids)
+        """
+        try:
+            sql = """
+                SELECT 
+                    comm_id, 
+                    list_cosine_similarity(report_embedding, ?::DOUBLE[]) as score,
+                    cited_chunk_ids
+                FROM community_reports
+                WHERE report_embedding IS NOT NULL
+                ORDER BY score DESC
+                LIMIT ?
+            """
+            return self.con.execute(sql, [query_embedding, limit]).fetchall()
+        except Exception:
+            # Table doesn't exist yet
+            return []
