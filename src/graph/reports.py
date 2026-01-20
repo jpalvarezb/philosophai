@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 class CommunityReportGenerator:
     """
     Generate grounded community reports with chunk citations.
-    
+
     Each report contains:
     - Representative entities (by weighted degree)
     - Key relationships (top edges by support)
@@ -42,13 +42,13 @@ class CommunityReportGenerator:
     ):
         """
         Generate reports for all communities meeting size threshold.
-        
+
         Args:
             min_community_size: Skip communities smaller than this
             max_communities: Limit number of communities to process (for testing)
         """
         self.storage.ensure_community_reports_table()
-        
+
         communities_df = self.storage.get_communities()
         if communities_df.empty:
             print("⚠️ No communities found. Run Leiden detection first.")
@@ -67,7 +67,7 @@ class CommunityReportGenerator:
 
             try:
                 report = self._generate_single_report(comm_id, node_ids)
-                
+
                 # Embed the report
                 embedding = self._get_embedding(report["report_text"])
 
@@ -91,7 +91,7 @@ class CommunityReportGenerator:
     def _generate_single_report(self, comm_id: int, node_ids: list[str]) -> dict:
         """
         Generate a report for a single community.
-        
+
         Returns:
             {
                 "report_text": str,
@@ -130,7 +130,7 @@ class CommunityReportGenerator:
         """Get top entities by weighted degree within community."""
         node_set = set(node_ids)
         subgraph = self.graph.subgraph(node_ids)
-        
+
         # Calculate weighted degree (sum of edge weights)
         weighted_degrees = {}
         for node in subgraph.nodes():
@@ -147,7 +147,7 @@ class CommunityReportGenerator:
 
         # Sort and take top k
         sorted_nodes = sorted(weighted_degrees.items(), key=lambda x: x[1], reverse=True)
-        
+
         result = []
         for node_id, degree in sorted_nodes[:top_k]:
             label = self.graph.nodes.get(node_id, {}).get("label", node_id)
@@ -193,7 +193,7 @@ class CommunityReportGenerator:
     ) -> str:
         """Generate structured report text via LLM."""
         entity_labels = [e["label"] for e in entities[:10]]
-        
+
         edge_descriptions = []
         for e in edges[:15]:
             edge_descriptions.append(
@@ -219,10 +219,8 @@ Write a 3-5 sentence summary that:
 Be specific and factual based on the entities and relationships shown."""
 
         response = self.llm_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=300,
         )
         return response.choices[0].message.content.strip()
 
@@ -303,11 +301,11 @@ class CommunityReporter:
     def print_report(self):
         """Print a formatted report of community statistics."""
         stats = self.get_summary_stats()
-        
+
         print("=" * 60)
         print("COMMUNITY REPORT")
         print("=" * 60)
-        
+
         if stats["total_communities"] == 0:
             print("No communities detected yet.")
             return
@@ -319,11 +317,11 @@ class CommunityReporter:
         print(f"Largest:           {stats['max_size']}")
         print(f"Smallest:          {stats['min_size']}")
         print(f"With summaries:    {stats['with_summaries']}")
-        
+
         print("\n" + "-" * 60)
         print("TOP 5 LARGEST COMMUNITIES:")
         print("-" * 60)
-        
+
         largest = self.get_largest_communities(5)
         for _, row in largest.iterrows():
             print(f"\nCommunity {row['community_id']} ({row['size']} nodes)")

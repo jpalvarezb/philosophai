@@ -47,45 +47,48 @@ def init_components():
     """Initialize all components (called at startup)."""
     from openai import OpenAI
     from ..storage import DuckDBStorage
-    from ..graph import GraphBuilder, GraphTraverser
+from ..graph import GraphBuilder, GraphTraverser, GraphFilters
     from ..rag import VectorSearch, ResultFusion, CitationBuilder
     from ..agents import MultiHopAgent
 
     # Config from environment
     db_path = os.environ.get("PHILOSOPH_DB", "data/philosoph.duckdb")
     openai_key = os.environ.get("OPENAI_API_KEY")
-    
+
     if not openai_key:
         raise ValueError("OPENAI_API_KEY environment variable required")
 
     print(f"📂 Initializing with DB: {db_path}")
-    
+
     # Storage
     state.storage = DuckDBStorage(Path(db_path))
-    
+
     # Graph
     print("🏗️ Building graph...")
     state.graph_builder = GraphBuilder(state.storage)
     G = state.graph_builder.build()
-    
+
     # Community mappings
     print("📊 Loading community mappings...")
     communities_df = state.storage.get_communities()
     for _, row in communities_df.iterrows():
         for node_id in row["node_ids"]:
             state.node_to_community[node_id] = row["community_id"]
-    
+
     # Ensure membership table is populated
     state.storage.populate_community_membership()
-    
+
     # Agent components
     print("🔧 Initializing agent...")
     client = OpenAI(api_key=openai_key)
     vector_search = VectorSearch(state.storage, client)
     fusion = ResultFusion(state.storage)
     citation_builder = CitationBuilder(state.storage, state.node_to_community)
-    traverser = GraphTraverser(G, state.node_to_community)
-    
+
+    # Initialize filters for traversal and seeding
+    filters = GraphFilters(G, hub_threshold_pct=0.01, min_degree=1)
+    traverser = GraphTraverser(G, state.node_to_community, filters=filters)
+
     state.agent = MultiHopAgent(
         storage=state.storage,
         graph_builder=state.graph_builder,
@@ -94,11 +97,13 @@ def init_components():
         citation_builder=citation_builder,
         traverser=traverser,
         llm_client=client,
+        node_to_community=state.node_to_community,
+        filters=filters,
     )
-    
+
     # Share agent with WebSocket module
     set_agent(state.agent)
-    
+
     state.ready = True
     print("✅ PhilosophAI ready!")
 
@@ -117,7 +122,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="PhilosophAI",
         description="Knowledge Graph RAG with Community Routing",
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
     )
 
@@ -144,7 +149,7 @@ def create_app() -> FastAPI:
         """Execute a GraphRAG query."""
         if not state.ready or not state.agent:
             raise HTTPException(status_code=503, detail="Agent not initialized")
-        
+
         result = state.agent.query(
             question=request.question,
             max_hops=request.max_hops,
@@ -159,15 +164,15 @@ def create_app() -> FastAPI:
         """Return graph nodes/edges for visualization."""
         if not state.ready:
             raise HTTPException(status_code=503, detail="Not initialized")
-        
+
         G = state.graph_builder.graph
         nodes = []
         links = []
-        
+
         # Get top nodes by degree
         node_degrees = sorted(G.degree(), key=lambda x: x[1], reverse=True)[:limit]
         node_set = {n[0] for n in node_degrees}
-        
+
         for node_id in node_set:
             data = G.nodes.get(node_id, {})
             nodes.append({
@@ -175,7 +180,7 @@ def create_app() -> FastAPI:
                 "label": data.get("label", node_id),
                 "community": state.node_to_community.get(node_id),
             })
-        
+
         for u, v, data in G.edges(data=True):
             if u in node_set and v in node_set:
                 links.append({
@@ -184,7 +189,7 @@ def create_app() -> FastAPI:
                     "label": data.get("label", ""),
                     "weight": data.get("weight", 1),
                 })
-        
+
         return {"nodes": nodes, "links": links}
 
     # Communities endpoint
@@ -193,16 +198,16 @@ def create_app() -> FastAPI:
         """Return all communities with reports."""
         if not state.ready:
             raise HTTPException(status_code=503, detail="Not initialized")
-        
+
         communities_df = state.storage.get_communities()
         reports_df = state.storage.get_community_reports()
-        
+
         # Merge reports with communities
         report_map = {}
         if not reports_df.empty:
             for _, row in reports_df.iterrows():
                 report_map[row["comm_id"]] = row["report_text"]
-        
+
         result = []
         for _, row in communities_df.iterrows():
             top_terms = row["top_terms"]
@@ -210,7 +215,7 @@ def create_app() -> FastAPI:
                 top_terms = []
             else:
                 top_terms = list(top_terms)[:10]
-            
+
             result.append({
                 "community_id": int(row["community_id"]),
                 "size": int(row["size"]),
@@ -218,7 +223,7 @@ def create_app() -> FastAPI:
                 "summary": row["summary"],
                 "report": report_map.get(row["community_id"]),
             })
-        
+
         return {"communities": result}
 
     # Single community detail
@@ -227,24 +232,24 @@ def create_app() -> FastAPI:
         """Get details for a specific community."""
         if not state.ready:
             raise HTTPException(status_code=503, detail="Not initialized")
-        
+
         # Get nodes in this community
         nodes = state.storage.get_nodes_in_communities([comm_id])
-        
+
         # Get community info
         communities_df = state.storage.get_communities()
         row = communities_df[communities_df["community_id"] == comm_id]
         if row.empty:
             raise HTTPException(status_code=404, detail="Community not found")
-        
+
         row = row.iloc[0]
-        
+
         top_terms = row["top_terms"]
         if top_terms is None or (hasattr(top_terms, '__len__') and len(top_terms) == 0):
             top_terms = []
         else:
             top_terms = list(top_terms)
-        
+
         return {
             "community_id": comm_id,
             "size": int(row["size"]),

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from openai import OpenAI
     from ..storage import DuckDBStorage
-    from ..graph import GraphBuilder, GraphTraverser
+    from ..graph import GraphBuilder, GraphTraverser, GraphFilters
     from ..rag import VectorSearch, ResultFusion, CitationBuilder
     from .tools import AgentTools
     from .trace import TraceRecorder
@@ -34,6 +34,8 @@ class MultiHopAgent:
         citation_builder: "CitationBuilder",
         traverser: "GraphTraverser",
         llm_client: "OpenAI",
+        node_to_community: dict[str, int],
+        filters: "GraphFilters",
         llm_model: str = "gpt-5.2",
         on_event: Callable[[dict], None] | None = None,  # For streaming updates
     ):
@@ -44,6 +46,8 @@ class MultiHopAgent:
         self.citation_builder = citation_builder
         self.traverser = traverser
         self.llm_client = llm_client
+        self.node_to_community = node_to_community
+        self.filters = filters
         self.llm_model = llm_model
         self.on_event = on_event or (lambda x: None)
 
@@ -80,6 +84,7 @@ class MultiHopAgent:
         target_communities = []
         community_cited_chunks = []
         community_scores = {}
+        report_result = None
         
         if use_community_routing:
             try:
@@ -113,28 +118,31 @@ class MultiHopAgent:
             observation=f"Total unique chunks: {len(all_chunk_ids)}",
         )
 
-        # Step 3: Get seed nodes - prefer entities from target communities
-        self._emit("status", {"message": "Identifying seed entities..."})
+        # Step 3: Query-aware seed selection
+        self._emit("status", {"message": "Selecting seed entities..."})
         
-        if target_communities:
-            # Get entities within target communities
-            community_nodes = self.storage.get_nodes_in_communities(target_communities)
-            # Also get entities from chunks
-            chunk_nodes = self.storage.get_entity_ids_from_chunks(all_chunk_ids[:20])
-            # Prioritize community nodes
-            community_node_set = set(community_nodes)
-            seed_nodes = [n for n in chunk_nodes if n in community_node_set]
-            # Add some non-community nodes as fallback
-            if len(seed_nodes) < 10:
-                seed_nodes.extend([n for n in chunk_nodes if n not in community_node_set][:10 - len(seed_nodes)])
-        else:
-            seed_nodes = self.storage.get_entity_ids_from_chunks(all_chunk_ids[:20])
+        from ..rag import select_seeds
+        
+        scored_seeds = select_seeds(
+            query=question,
+            chunk_ids=all_chunk_ids[:30],
+            storage=self.storage,
+            graph=self.graph_builder.graph,
+            node_to_community=self.node_to_community,
+            target_communities=target_communities,
+            filters=self.filters,
+            max_seeds=20,
+        )
+        
+        seed_nodes = [s.entity_id for s in scored_seeds]
+        seed_labels = [f"{s.label}({s.score:.2f})" for s in scored_seeds[:5]]
         
         trace.add_thought(
-            f"Identified {len(seed_nodes)} seed entities (community-filtered: {bool(target_communities)})",
-            observation=f"Seeds: {seed_nodes[:10]}",
+            f"Selected {len(seed_nodes)} query-relevant seeds",
+            action="seed_selection",
+            observation=f"Top seeds: {seed_labels}",
         )
-        trace.seed_entities = seed_nodes[:20]
+        trace.seed_entities = seed_nodes
 
         # Step 4: Community-gated graph traversal
         self._emit("status", {"message": "Traversing knowledge graph..."})
@@ -148,11 +156,11 @@ class MultiHopAgent:
         traversal_trace = self.traverser.traverse(
             seed_nodes=seed_nodes,
             target_communities=traversal_communities,
+            query=question,
             max_hops=max_hops,
             max_nodes=50,
             restrict_to_communities=bool(target_communities),  # Strict mode if we have community routing
         )
-        traversal_trace.query = question
         traversal_trace.seed_chunks = all_chunk_ids[:20]
 
         trace.add_thought(
@@ -163,28 +171,28 @@ class MultiHopAgent:
         trace.communities_explored = list(traversal_trace.visited_communities)
         trace.nodes_visited = list(traversal_trace.visited_nodes)
 
-        # Step 5: Fuse results
-        self._emit("status", {"message": "Ranking and selecting context..."})
-        fused = self.fusion.fuse(vector_result, traversal_trace, max_chunks=30)
+        # Step 5: Select context (with must-keep guarantees)
+        self._emit("status", {"message": "Selecting context..."})
         
-        # Boost community-cited chunks in fusion
-        if community_cited_chunks:
-            community_chunk_set = set(community_cited_chunks)
-            for chunk_id in fused.chunk_ids:
-                if chunk_id in community_chunk_set:
-                    fused.chunk_scores[chunk_id] = fused.chunk_scores.get(chunk_id, 0) + 0.2
-        
-        context_chunks = self.fusion.get_context_chunks(fused, limit=max_context_chunks)
-
-        trace.total_chunks_retrieved = len(fused.chunk_ids)
-        trace.add_thought(
-            f"Fused {len(fused.chunk_ids)} unique chunks, selected top {len(context_chunks)} for context",
+        context_chunks, all_collected_ids, context_scores = self.fusion.get_context_with_selection(
+            query=question,
+            report_result=report_result if use_community_routing else None,
+            vector_chunks=vector_result.chunk_ids,
+            trace=traversal_trace,
+            max_context=max_context_chunks,
         )
 
-        # Step 6: Build citations
+        trace.total_chunks_retrieved = len(all_collected_ids)
+        trace.add_thought(
+            f"Collected {len(all_collected_ids)} chunks, selected {len(context_chunks)} for LLM context",
+            observation=f"Context sources: report={len(community_cited_chunks)}, traversal={len(traversal_trace.collected_chunk_ids)}, vector={len(vector_result.chunk_ids)}",
+        )
+
+        # Step 6: Build citations (from context chunks only)
         chunk_ids_for_citations = [c[0] for c in context_chunks]
         citations = self.citation_builder.build_citations(chunk_ids_for_citations)
         trace.final_cited_chunk_ids = chunk_ids_for_citations
+        trace.all_collected_chunk_ids = all_collected_ids  # Keep full set for UI
 
         # Step 7: Generate answer
         self._emit("status", {"message": "Generating answer..."})

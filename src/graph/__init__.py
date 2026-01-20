@@ -1,12 +1,14 @@
 from .builder import GraphBuilder
 from .communities import CommunityDetector
+from .reports import CommunityReportGenerator, CommunityReporter
 from .traversal import GraphTraverser
-from .reports import CommunityReporter, CommunityReportGenerator
+from .filters import GraphFilters
 
 __all__ = [
     "GraphBuilder",
     "CommunityDetector",
-    "GraphTraverser",
-    "CommunityReporter",
     "CommunityReportGenerator",
+    "CommunityReporter",
+    "GraphTraverser",
+    "GraphFilters",
 ]

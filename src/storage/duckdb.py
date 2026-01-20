@@ -107,6 +107,54 @@ class DuckDBStorage:
         results = self.con.execute(sql, chunk_ids * 2).fetchall()
         return [r[0] for r in results if r[0]]
 
+    def get_cluster_edges_df(self) -> "pd.DataFrame":
+        """
+        Get edges aggregated by (subject, object) pair for clustering.
+        
+        Collapses all predicates between an entity pair into a single undirected edge.
+        Weight = number of distinct chunks mentioning any relationship between the pair.
+        
+        Returns DataFrame with columns:
+            - u_id: lesser of the two entity IDs (for undirected consistency)
+            - v_id: greater of the two entity IDs
+            - weight: COUNT(DISTINCT chunk_id) across all predicates
+            - predicate_count: number of distinct predicates
+            - top_predicates: most common predicates (for reporting)
+            - chunk_ids: list of supporting chunk IDs
+        """
+        return self.con.execute("""
+            SELECT
+                LEAST(subject_canon_id, object_canon_id) as u_id,
+                GREATEST(subject_canon_id, object_canon_id) as v_id,
+                COUNT(DISTINCT chunk_id) as weight,
+                COUNT(DISTINCT predicate_canon_id) as predicate_count,
+                ARRAY_AGG(DISTINCT predicate_canon_id ORDER BY predicate_canon_id)[:5] as top_predicates,
+                LIST(DISTINCT chunk_id) as chunk_ids
+            FROM normalized_triples_clean_canon
+            WHERE object_canon_id IS NOT NULL AND object_canon_id != ''
+              AND subject_canon_id != object_canon_id  -- no self-loops
+            GROUP BY 1, 2
+        """).fetchdf()
+
+    def get_pair_predicates(self, u_id: str, v_id: str) -> list[tuple[str, int]]:
+        """
+        Get all predicates between an entity pair with their support counts.
+        Used for community reports to show predicate distribution.
+        
+        Returns list of (predicate, count) tuples sorted by count desc.
+        """
+        result = self.con.execute("""
+            SELECT predicate_canon_id, COUNT(DISTINCT chunk_id) as support
+            FROM normalized_triples_clean_canon
+            WHERE (
+                (subject_canon_id = ? AND object_canon_id = ?)
+                OR (subject_canon_id = ? AND object_canon_id = ?)
+            )
+            GROUP BY 1
+            ORDER BY support DESC
+        """, [u_id, v_id, v_id, u_id]).fetchall()
+        return result
+
     # -------------------------------------------------------------------------
     # Communities (to be populated later)
     # -------------------------------------------------------------------------

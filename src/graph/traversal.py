@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import networkx as nx
     from ..schema import TraversalStep, TraversalTrace
+    from .filters import GraphFilters
 
 
 @dataclass
@@ -30,102 +31,142 @@ class GraphTraverser:
     Best-first traversal that respects community boundaries.
     
     Prioritizes:
-    1. Nodes within target communities (from vector search on summaries)
-    2. High-weight edges
-    3. Semantic similarity to query (if embeddings available)
+    1. Query relevance (label token overlap)
+    2. Nodes within target communities
+    3. High-weight edges with valuable predicates
+    4. Depth penalty (prefer shallower paths)
     """
 
     def __init__(
         self,
         graph: "nx.MultiDiGraph",
         node_to_community: dict[str, int],
-        query_embedding: list[float] | None = None,
+        filters: "GraphFilters | None" = None,
         # Scoring weights
-        semantic_weight: float = 0.5,
+        query_relevance_weight: float = 0.4,
         edge_weight_factor: float = 0.2,
         community_affinity: float = 0.3,
+        depth_penalty: float = 0.05,
     ):
         self.graph = graph
         self.node_to_community = node_to_community
-        self.query_embedding = query_embedding
-        self.semantic_weight = semantic_weight
+        self.filters = filters
+        self.query_relevance_weight = query_relevance_weight
         self.edge_weight_factor = edge_weight_factor
         self.community_affinity = community_affinity
+        self.depth_penalty = depth_penalty
+        self._query_tokens: set[str] = set()  # Set per-traversal
 
     def traverse(
         self,
         seed_nodes: list[str],
         target_communities: list[int],
+        query: str = "",
         max_hops: int = 2,
         max_nodes: int = 50,
-        max_cross_community_hops: int = 1,
+        seed_cap: int = 20,
+        beam_width: int = 25,
         restrict_to_communities: bool = False,
     ) -> "TraversalTrace":
         """
         Perform best-first traversal from seed nodes.
         
         Args:
-            seed_nodes: Starting node IDs (from vector search)
-            target_communities: Community IDs to prioritize (from summary search)
+            seed_nodes: Starting node IDs (already filtered/scored by caller)
+            target_communities: Community IDs to prioritize
             max_hops: Maximum depth from any seed
-            max_nodes: Stop after visiting this many nodes
-            max_cross_community_hops: Limit hops outside target communities
-            restrict_to_communities: If True, strictly stay within target communities (GraphRAG mode)
+            max_nodes: Stop after visiting this many expansion nodes
+            seed_cap: Maximum seeds to use (prevents budget exhaustion)
+            beam_width: Max nodes to expand per depth level
+            restrict_to_communities: If True, strictly stay within target communities
         
         Returns:
             TraversalTrace with visited nodes, edges, and collected chunks
         """
         from ..schema import TraversalStep, TraversalTrace
+        import re
 
         trace = TraversalTrace(
-            query="",  # Set by caller
-            seed_nodes=seed_nodes,
+            query=query,
+            seed_nodes=seed_nodes[:seed_cap],
             seed_communities=target_communities,
         )
+
+        # Extract query tokens for relevance scoring during expansion
+        if query:
+            stopwords = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'what', 'how',
+                         'why', 'when', 'where', 'which', 'who', 'to', 'of', 'in',
+                         'for', 'on', 'with', 'between', 'relationship'}
+            self._query_tokens = {t for t in re.findall(r'[a-z]+', query.lower())
+                                  if len(t) > 2 and t not in stopwords}
+        else:
+            self._query_tokens = set()
 
         target_set = set(target_communities)
         visited: set[str] = set()
         heap: list[ScoredNode] = []
+        
+        # Track expansion count separately from seed processing
+        expansion_count = 0
+        
+        # Diagnostic counters (instance vars for access in _expand_node)
+        self._filtered_low_quality = 0
+        self._filtered_blocked_pred = 0
+        self._filtered_community = 0
 
-        # Initialize heap with seed nodes
+        # Initialize heap with capped seeds (seeds are depth=0)
+        seeds_added = 0
         for node_id in seed_nodes:
-            if node_id in self.graph:
-                community_id = self.node_to_community.get(node_id)
-                # In strict mode, skip seeds not in target communities (unless no targets)
-                if restrict_to_communities and target_set and community_id not in target_set:
-                    continue
-                score = self._score_node(node_id, None, target_set, 0)
-                heapq.heappush(
-                    heap,
-                    ScoredNode(
-                        score=score,
-                        node_id=node_id,
-                        from_node_id=None,
-                        edge_label=None,
-                        depth=0,
-                        community_id=community_id,
-                    ),
-                )
+            if seeds_added >= seed_cap:
+                break
+            if node_id not in self.graph:
+                continue
+            
+            community_id = self.node_to_community.get(node_id)
+            
+            # In strict mode, skip seeds not in target communities
+            if restrict_to_communities and target_set and community_id not in target_set:
+                continue
+            
+            score = self._score_node(node_id, None, target_set, 0)
+            heapq.heappush(
+                heap,
+                ScoredNode(
+                    score=score,
+                    node_id=node_id,
+                    from_node_id=None,
+                    edge_label=None,
+                    depth=0,
+                    community_id=community_id,
+                ),
+            )
+            seeds_added += 1
 
         step_number = 0
-        cross_community_count = 0
+        nodes_at_depth: dict[int, int] = {}  # Track beam width per depth
 
-        while heap and len(visited) < max_nodes:
+        while heap and expansion_count < max_nodes:
             current = heapq.heappop(heap)
 
             if current.node_id in visited:
                 continue
+            
+            # Beam width check: limit nodes processed per depth
+            depth = current.depth
+            nodes_at_depth[depth] = nodes_at_depth.get(depth, 0) + 1
+            if depth > 0 and nodes_at_depth[depth] > beam_width:
+                continue
 
-            # Check cross-community limit
-            if current.community_id is not None and current.community_id not in target_set:
-                if restrict_to_communities:
-                    # Strict mode: skip all nodes outside target communities
+            # Filter check during expansion (less strict than seeding)
+            if self.filters and depth > 0:
+                if not self.filters.is_valid_expansion(current.node_id):
                     continue
-                if cross_community_count >= max_cross_community_hops:
-                    continue
-                cross_community_count += 1
 
             visited.add(current.node_id)
+            
+            # Count toward budget only for expansions (depth > 0)
+            if depth > 0:
+                expansion_count += 1
 
             # Collect chunks from edge used to reach this node
             edge_chunks = []
@@ -134,7 +175,7 @@ class GraphTraverser:
                     current.from_node_id, current.node_id, current.edge_label
                 )
 
-            # Record step
+            # Record step (seeds at depth=0, expansions at depth>=1)
             step = TraversalStep(
                 step_number=step_number,
                 node_id=current.node_id,
@@ -160,6 +201,11 @@ class GraphTraverser:
                     restrict_to_communities,
                 )
 
+        # Store diagnostic counters in trace
+        trace.filtered_low_quality = self._filtered_low_quality
+        trace.filtered_blocked_pred = self._filtered_blocked_pred
+        trace.filtered_community = self._filtered_community
+        
         return trace
 
     def _score_node(
@@ -168,24 +214,39 @@ class GraphTraverser:
         edge_weight: int | None,
         target_communities: set[int],
         depth: int,
+        predicate: str | None = None,
     ) -> float:
         """Calculate priority score for a node."""
+        import re
         score = 0.0
+
+        # Query relevance: check label token overlap
+        if self._query_tokens:
+            label = self.graph.nodes.get(node_id, {}).get("label", node_id)
+            label_tokens = set(re.findall(r'[a-z]+', label.lower()))
+            overlap = label_tokens & self._query_tokens
+            if overlap:
+                # Proportional to overlap
+                relevance = len(overlap) / max(len(self._query_tokens), 1)
+                score += self.query_relevance_weight * relevance
 
         # Community affinity bonus
         community_id = self.node_to_community.get(node_id)
         if community_id in target_communities:
             score += self.community_affinity
 
-        # Edge weight bonus (normalized)
+        # Edge weight bonus (normalized), with predicate quality
         if edge_weight:
-            score += self.edge_weight_factor * min(edge_weight / 10.0, 1.0)
+            weight_score = self.edge_weight_factor * min(edge_weight / 10.0, 1.0)
+            if self.filters and predicate:
+                pred_weight = self.filters.predicate_weight(predicate)
+                if pred_weight == 0:  # Blocked predicate
+                    return -1.0  # Signal to skip this edge
+                weight_score *= pred_weight
+            score += weight_score
 
         # Depth penalty (prefer shallower)
-        score -= 0.05 * depth
-
-        # TODO: Add semantic similarity if query_embedding and node embeddings available
-        # For now, this would require node-level embeddings which we don't have yet
+        score -= self.depth_penalty * depth
 
         return score
 
@@ -205,21 +266,48 @@ class GraphTraverser:
         for neighbor_id in self.graph[node_id]:
             if neighbor_id in visited:
                 continue
+            
+            # Filter check: skip stop entities during expansion
+            if self.filters and not self.filters.is_valid_expansion(neighbor_id):
+                self._filtered_low_quality += 1
+                continue
 
             neighbor_community = self.node_to_community.get(neighbor_id)
             
             # In strict mode, only expand to nodes within target communities
             if restrict_to_communities and target_communities and neighbor_community not in target_communities:
+                self._filtered_community += 1
                 continue
 
-            # Get best edge to this neighbor
+            # Get best edge to this neighbor (by weight, with predicate quality)
             edges = self.graph[node_id][neighbor_id]
-            best_edge_key = max(edges.keys(), key=lambda k: edges[k].get("weight", 1))
+            best_edge_key = None
+            best_score = -1
+            for key in edges:
+                weight = edges[key].get("weight", 1)
+                label = edges[key].get("label", key)
+                modifier = self.filters.edge_weight_modifier(label) if self.filters else 1.0
+                adjusted = weight * modifier
+                if adjusted > best_score:
+                    best_score = adjusted
+                    best_edge_key = key
+            
+            if best_edge_key is None:
+                continue
+                
             edge_data = edges[best_edge_key]
             edge_weight = edge_data.get("weight", 1)
             edge_label = edge_data.get("label", best_edge_key)
 
-            score = self._score_node(neighbor_id, edge_weight, target_communities, current_depth + 1)
+            score = self._score_node(
+                neighbor_id, edge_weight, target_communities, 
+                current_depth + 1, predicate=edge_label
+            )
+            
+            # Skip if score is negative (blocked predicate)
+            if score < 0:
+                self._filtered_blocked_pred += 1
+                continue
 
             heapq.heappush(
                 heap,

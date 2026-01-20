@@ -382,9 +382,11 @@
         let Graph;
         let graphData = { nodes: [], links: [] };
         let nodesById = {};
+        let linksById = {};  // Track links by "source-target" key
         let highlightNodes = new Set();
         let highlightLinks = new Set();
         let traversalNodes = new Set();  // Nodes from query traversal
+        let traversalLinks = new Set();  // Links from query traversal
         let communityColors = {};
 
         // Generate colors for communities
@@ -446,9 +448,11 @@
                 })
                 .linkColor(link => {
                     if (highlightLinks.has(link)) return '#60a5fa';
-                    // Check if both ends are traversal nodes
                     const srcId = typeof link.source === 'object' ? link.source.id : link.source;
                     const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
+                    // Check if this is a traversal link
+                    if (traversalLinks.has(`${srcId}-${tgtId}`) || traversalLinks.has(`${tgtId}-${srcId}`)) return '#10b981';
+                    // Fallback: check if both ends are traversal nodes
                     if (traversalNodes.has(srcId) && traversalNodes.has(tgtId)) return '#10b981';
                     return 'rgba(255,255,255,0.06)';
                 })
@@ -456,10 +460,49 @@
                     if (highlightLinks.has(link)) return 2;
                     const srcId = typeof link.source === 'object' ? link.source.id : link.source;
                     const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
+                    // Check if this is a traversal link
+                    if (traversalLinks.has(`${srcId}-${tgtId}`) || traversalLinks.has(`${tgtId}-${srcId}`)) return 1.5;
                     if (traversalNodes.has(srcId) && traversalNodes.has(tgtId)) return 1.5;
                     return 0.3;
                 })
                 .linkOpacity(0.6)
+                .linkCurvature(0.25)  // Curved edges
+                .linkCurveRotation(link => {
+                    // Vary rotation based on link to avoid overlapping curves
+                    const srcId = typeof link.source === 'object' ? link.source.id : link.source;
+                    const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
+                    return (srcId + tgtId).split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 360 * Math.PI / 180;
+                })
+                .linkThreeObjectExtend(true)  // Keep default link line + add custom object
+                .linkThreeObject(link => {
+                    // Add label sprite for edge
+                    const label = link.label || link.type || '';
+                    if (!label) return null;
+                    
+                    const srcId = typeof link.source === 'object' ? link.source.id : link.source;
+                    const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
+                    const isTraversalLink = traversalLinks.has(`${srcId}-${tgtId}`) || traversalLinks.has(`${tgtId}-${srcId}`);
+                    const isDimmed = (traversalNodes.size > 0 || highlightNodes.size > 0) && 
+                                     !traversalNodes.has(srcId) && !traversalNodes.has(tgtId) &&
+                                     !highlightNodes.has(srcId) && !highlightNodes.has(tgtId);
+                    
+                    if (isDimmed) return null;  // Don't show labels for dimmed edges
+                    
+                    const sprite = new SpriteText(label);
+                    sprite.color = isTraversalLink ? '#10b981' : 'rgba(255,255,255,0.5)';
+                    sprite.textHeight = 1.8;
+                    sprite.material.depthTest = false;
+                    return sprite;
+                })
+                .linkPositionUpdate((sprite, { start, end }) => {
+                    // Position label at middle of link
+                    if (sprite) {
+                        const middlePos = Object.assign(
+                            ...['x', 'y', 'z'].map(c => ({ [c]: start[c] + (end[c] - start[c]) / 2 }))
+                        );
+                        Object.assign(sprite.position, middlePos);
+                    }
+                })
                 .onNodeClick(node => {
                     highlightNodes.clear();
                     highlightLinks.clear();
@@ -499,7 +542,9 @@
         }
         
         function updateGraph() {
+            // Refresh both node and link rendering
             Graph.nodeThreeObject(Graph.nodeThreeObject());
+            Graph.linkThreeObject(Graph.linkThreeObject());
         }
         
         function showNodeInfo(node) {
@@ -523,6 +568,7 @@
                 
                 // Build lookup
                 nodesById = Object.fromEntries(graphData.nodes.map(n => [n.id, n]));
+                linksById = {};
                 
                 // Calculate degrees and build neighbor lists
                 graphData.nodes.forEach(node => {
@@ -532,8 +578,15 @@
                 });
                 
                 graphData.links.forEach(link => {
-                    const src = nodesById[link.source];
-                    const tgt = nodesById[link.target];
+                    const srcId = typeof link.source === 'object' ? link.source.id : link.source;
+                    const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
+                    const src = nodesById[srcId];
+                    const tgt = nodesById[tgtId];
+                    
+                    // Build link lookup (both directions)
+                    linksById[`${srcId}-${tgtId}`] = link;
+                    linksById[`${tgtId}-${srcId}`] = link;
+                    
                     if (src && tgt) {
                         src.val = (src.val || 0) + 1;
                         tgt.val = (tgt.val || 0) + 1;
@@ -584,6 +637,7 @@
             document.getElementById('answer-box').style.display = 'none';
             document.getElementById('citations-section').style.display = 'none';
             traversalNodes.clear();
+            traversalLinks.clear();
             highlightNodes.clear();
             highlightLinks.clear();
             
@@ -612,16 +666,86 @@
                         ).join('');
                 }
                 
-                // Show traversal stats
+                // Show traversal stats and dynamically add nodes/edges from query
                 const traversal = data.traversal || {};
+                let graphNeedsUpdate = false;
+                
+                // Add nodes from traversal that aren't in main graph
+                if (traversal.nodes?.length > 0) {
+                    traversal.nodes.forEach(node => {
+                        if (!nodesById[node.id]) {
+                            // New node not in main DAG - add it
+                            const newNode = {
+                                id: node.id,
+                                label: node.label || node.id,
+                                community: node.community,
+                                val: 1,
+                                neighbors: [],
+                                links: [],
+                                _dynamic: true  // Mark as dynamically added
+                            };
+                            graphData.nodes.push(newNode);
+                            nodesById[node.id] = newNode;
+                            graphNeedsUpdate = true;
+                        }
+                    });
+                }
+                
+                // Add edges from traversal that aren't in main graph
+                if (traversal.edges?.length > 0) {
+                    traversal.edges.forEach(edge => {
+                        const srcId = edge.source || edge.src;
+                        const tgtId = edge.target || edge.tgt;
+                        const linkKey = `${srcId}-${tgtId}`;
+                        const linkKeyRev = `${tgtId}-${srcId}`;
+                        
+                        if (!linksById[linkKey] && !linksById[linkKeyRev]) {
+                            // New edge not in main DAG - add it
+                            const newLink = {
+                                source: srcId,
+                                target: tgtId,
+                                label: edge.label || edge.type || '',
+                                _dynamic: true  // Mark as dynamically added
+                            };
+                            graphData.links.push(newLink);
+                            linksById[linkKey] = newLink;
+                            linksById[linkKeyRev] = newLink;
+                            
+                            // Update neighbor references
+                            const src = nodesById[srcId];
+                            const tgt = nodesById[tgtId];
+                            if (src && tgt) {
+                                src.neighbors.push(tgt);
+                                tgt.neighbors.push(src);
+                                src.links.push(newLink);
+                                tgt.links.push(newLink);
+                                src.val = (src.val || 0) + 1;
+                                tgt.val = (tgt.val || 0) + 1;
+                            }
+                            graphNeedsUpdate = true;
+                        }
+                        
+                        // Track as traversal link for highlighting
+                        traversalLinks.add(linkKey);
+                    });
+                }
+                
                 if (traversal.visited_nodes?.length > 0) {
                     document.getElementById('traversal-stats').style.display = 'block';
                     document.getElementById('nodes-visited').innerText = traversal.visited_nodes.length;
-                    document.getElementById('edges-traversed').innerText = traversal.edges_traversed || '-';
+                    document.getElementById('edges-traversed').innerText = traversal.edges_traversed || traversal.edges?.length || '-';
                     document.getElementById('hops-count').innerText = traversal.hops || '-';
                     
                     // Highlight traversed nodes in graph
                     traversal.visited_nodes.forEach(n => traversalNodes.add(n));
+                }
+                
+                // Update graph if new nodes/edges were added
+                if (graphNeedsUpdate) {
+                    Graph.graphData(graphData);
+                    document.getElementById('node-count').innerText = graphData.nodes.length.toLocaleString();
+                    document.getElementById('edge-count').innerText = graphData.links.length.toLocaleString();
+                } else if (traversalNodes.size > 0 || traversalLinks.size > 0) {
                     updateGraph();
                 }
                 

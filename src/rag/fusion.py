@@ -1,13 +1,19 @@
 """Fuse and rerank results from vector search and graph traversal."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..storage import DuckDBStorage
     from ..schema import TraversalTrace
-    from .vector import VectorSearchResult
+    from .vector import VectorSearchResult, CommunityReportSearchResult
+
+
+# Default config for context selection
+MAX_CONTEXT_CHUNKS = 35
+MUST_KEEP_REPORT_CHUNKS = 8
+MUST_KEEP_TRAVERSAL_CHUNKS = 12
 
 
 @dataclass
@@ -107,3 +113,134 @@ class ResultFusion:
         """
         top_ids = fused.chunk_ids[:limit]
         return self.storage.get_chunk_texts(top_ids)
+
+    def select_context_chunks(
+        self,
+        query: str,
+        report_cited_chunks: list[str],
+        traversal_chunks: list[str],
+        traversal_chunk_scores: dict[str, float],
+        vector_search_chunks: list[str],
+        query_embedding: list[float] | None = None,
+        max_context: int = MAX_CONTEXT_CHUNKS,
+        must_keep_report: int = MUST_KEEP_REPORT_CHUNKS,
+        must_keep_traversal: int = MUST_KEEP_TRAVERSAL_CHUNKS,
+    ) -> tuple[list[str], dict[str, float]]:
+        """
+        Select final context chunks for LLM, with must-keep guarantees.
+        
+        Priority:
+        1. Must-keep: top report-cited chunks
+        2. Must-keep: top traversal-scored chunks
+        3. Fill: vector search chunks by similarity
+        4. Fill: remaining traversal chunks
+        
+        Args:
+            query: Original question
+            report_cited_chunks: Chunks cited by community reports
+            traversal_chunks: All chunks from traversal
+            traversal_chunk_scores: Scores from traversal (step position, etc.)
+            vector_search_chunks: Chunks from direct vector search
+            query_embedding: Pre-computed query embedding (optional)
+            max_context: Maximum chunks for LLM context
+            must_keep_report: Guaranteed report chunk slots
+            must_keep_traversal: Guaranteed traversal chunk slots
+        
+        Returns:
+            (context_chunk_ids, chunk_scores) - ordered list and score dict
+        """
+        selected: list[str] = []
+        scores: dict[str, float] = {}
+        seen: set[str] = set()
+        
+        def add_chunk(chunk_id: str, score: float, source: str) -> bool:
+            """Add chunk if not seen and under limit."""
+            if chunk_id in seen or len(selected) >= max_context:
+                return False
+            selected.append(chunk_id)
+            scores[chunk_id] = score
+            seen.add(chunk_id)
+            return True
+        
+        # 1. Must-keep: top report-cited chunks
+        for i, chunk_id in enumerate(report_cited_chunks[:must_keep_report]):
+            score = 1.0 - (i * 0.05)  # Decay by position
+            add_chunk(chunk_id, score, "report")
+        
+        # 2. Must-keep: top traversal chunks by score
+        traversal_sorted = sorted(
+            [(cid, traversal_chunk_scores.get(cid, 0)) for cid in traversal_chunks],
+            key=lambda x: -x[1]
+        )
+        added_traversal = 0
+        for chunk_id, score in traversal_sorted:
+            if added_traversal >= must_keep_traversal:
+                break
+            if add_chunk(chunk_id, score, "traversal"):
+                added_traversal += 1
+        
+        # 3. Fill: vector search chunks (already ranked by similarity)
+        for i, chunk_id in enumerate(vector_search_chunks):
+            if len(selected) >= max_context:
+                break
+            score = 0.8 - (i * 0.02)  # Decay by position
+            add_chunk(chunk_id, score, "vector")
+        
+        # 4. Fill: remaining traversal chunks
+        for chunk_id, score in traversal_sorted:
+            if len(selected) >= max_context:
+                break
+            add_chunk(chunk_id, score * 0.8, "traversal_fill")
+        
+        return selected, scores
+
+    def get_context_with_selection(
+        self,
+        query: str,
+        report_result: "CommunityReportSearchResult | None",
+        vector_chunks: list[str],
+        trace: "TraversalTrace | None",
+        max_context: int = MAX_CONTEXT_CHUNKS,
+    ) -> tuple[list[tuple[str, str]], list[str], dict[str, float]]:
+        """
+        High-level method: select context and fetch content.
+        
+        Returns:
+            (context_texts, all_collected_ids, context_scores)
+            - context_texts: [(chunk_id, content), ...] for LLM
+            - all_collected_ids: full set for UI/citations
+            - context_scores: scores for selected context
+        """
+        # Gather all collected chunks (for UI)
+        all_collected = set(vector_chunks)
+        
+        report_cited = []
+        if report_result:
+            report_cited = report_result.cited_chunk_ids
+            all_collected.update(report_cited)
+        
+        traversal_chunks = []
+        traversal_scores = {}
+        if trace:
+            traversal_chunks = list(set(trace.collected_chunk_ids))
+            all_collected.update(traversal_chunks)
+            # Score by step position (earlier = higher)
+            for step in trace.steps:
+                for chunk_id in step.chunk_ids:
+                    if chunk_id not in traversal_scores:
+                        traversal_scores[chunk_id] = max(0.5, 1.0 - step.step_number * 0.02)
+        
+        # Select context
+        context_ids, context_scores = self.select_context_chunks(
+            query=query,
+            report_cited_chunks=report_cited,
+            traversal_chunks=traversal_chunks,
+            traversal_chunk_scores=traversal_scores,
+            vector_search_chunks=vector_chunks,
+            max_context=max_context,
+        )
+        
+        # Fetch content
+        context_texts = self.storage.get_chunk_texts(context_ids)
+        
+        return context_texts, list(all_collected), context_scores

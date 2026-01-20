@@ -17,7 +17,10 @@ class GraphBuilder:
         self.graph: nx.MultiDiGraph | None = None
 
     def build(self) -> nx.MultiDiGraph:
-        """Build graph from triples in DuckDB."""
+        """
+        Build full directed graph from triples in DuckDB.
+        Used for traversal and reasoning - preserves all predicates.
+        """
         print("📊 Loading triples from DB...")
         df = self.storage.get_triples_df()
         print(f"✅ Loaded {len(df)} unique edges.")
@@ -48,6 +51,61 @@ class GraphBuilder:
 
         print(f"🎉 Graph built: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
         self.graph = G
+        return G
+
+    def build_cluster_projection(self) -> nx.Graph:
+        """
+        Build undirected graph for clustering.
+        
+        Collapses all predicates between entity pairs into single edges.
+        Weight = number of distinct chunks mentioning any relationship.
+        
+        Use this for Leiden community detection, NOT for traversal.
+        """
+        print("📊 Loading cluster projection edges...")
+        df = self.storage.get_cluster_edges_df()
+        print(f"✅ Loaded {len(df)} entity pair edges.")
+
+        # Show weight distribution
+        weight_counts = df['weight'].value_counts().sort_index()
+        print("   Weight distribution:")
+        for w in sorted(weight_counts.index)[:8]:
+            print(f"      weight={w}: {weight_counts[w]:,} edges")
+        total = len(df)
+        gt1 = len(df[df['weight'] > 1])
+        print(f"   Edges with weight > 1: {gt1:,} ({100*gt1/total:.1f}%)")
+
+        print("🏗️ Building undirected cluster graph...")
+        G = nx.Graph()  # Undirected for clustering
+
+        # Get node labels from the full triples
+        node_labels = {}
+        triples_df = self.storage.get_triples_df()
+        for _, row in triples_df.iterrows():
+            node_labels[row["subject_canon_id"]] = row["subject_label"]
+            node_labels[row["object_canon_id"]] = row["object_label"]
+
+        for _, row in df.iterrows():
+            u_id = row["u_id"]
+            v_id = row["v_id"]
+
+            # Add nodes
+            if u_id not in G:
+                G.add_node(u_id, label=node_labels.get(u_id, u_id))
+            if v_id not in G:
+                G.add_node(v_id, label=node_labels.get(v_id, v_id))
+
+            # Add undirected edge with aggregated weight
+            G.add_edge(
+                u_id,
+                v_id,
+                weight=row["weight"],
+                predicate_count=row["predicate_count"],
+                top_predicates=row["top_predicates"],
+                chunks=row["chunk_ids"],
+            )
+
+        print(f"🎉 Cluster graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
         return G
 
     def save(self, path: str | Path):
