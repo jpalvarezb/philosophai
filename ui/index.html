@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monk AI - Knowledge Graph</title>
+    <style>
+        :root { color-scheme: dark; }
+        body { margin: 0; overflow: hidden; background-color: #000; color: #fff; font-family: 'Segoe UI', sans-serif; }
+        
+        #overlay {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(7, 7, 7, 0.85);
+            backdrop-filter: blur(10px);
+            padding: 20px; border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.15);
+            max-width: 300px; z-index: 100;
+            pointer-events: none;
+            box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+        }
+        h1 { margin: 0 0 10px 0; font-weight: 300; letter-spacing: 2px; font-size: 1.2rem; color: #fff; }
+        p { margin: 0; font-size: 0.85rem; color: #aaa; }
+        
+        #info-panel {
+            margin-top: 15px; padding-top: 15px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            display: none;
+        }
+        .stat-label { font-size: 0.7rem; text-transform: uppercase; color: #888; margin-bottom: 2px; letter-spacing: 1px; }
+        .stat-value { font-size: 1.1rem; color: #fff; font-weight: bold; }
+        
+        #reset-btn {
+            pointer-events: auto;
+            margin-top: 15px;
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #fff; border-radius: 20px;
+            cursor: pointer; font-size: 0.8rem;
+            transition: all 0.2s;
+            display: none;
+        }
+        #reset-btn:hover { background: rgba(255,255,255,0.3); }
+
+        #loading {
+            position: fixed; inset: 0; 
+            display: flex; justify-content: center; align-items: center;
+            background: #000; z-index: 200;
+            flex-direction: column;
+        }
+        .spinner {
+            width: 40px; height: 40px; 
+            border: 3px solid rgba(255,255,255,0.3); 
+            border-top-color: #fff; border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #error-msg { color: red; margin-top: 10px; display: none; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        <div id="loading-text">Loading Graph Data...</div>
+        <div id="error-msg"></div>
+    </div>
+
+    <div id="overlay">
+        <h1>KNOWLEDGE SPHERE</h1>
+        <p>Interactive conceptual map.</p>
+        <p style="font-size: 0.7rem; color: #666; margin-top: 5px;">Left Click: Select | Right Click: Pan</p>
+        
+        <div id="info-panel">
+            <div class="stat-label">SELECTED NODE</div>
+            <div class="stat-value" id="node-name">--</div>
+            <div style="margin-top: 10px;">
+                <div class="stat-label">CONNECTIONS</div>
+                <div class="stat-value" id="node-degree">0</div>
+            </div>
+        </div>
+        
+        <button id="reset-btn">Reset View</button>
+    </div>
+
+    <div id="3d-graph"></div>
+
+    <script type="module">
+        // Use older versions that predate WebGPU requirement
+        import ForceGraph3D from 'https://esm.sh/3d-force-graph@1.70.14?deps=three@0.152.0';
+        import SpriteText from 'https://esm.sh/three-spritetext@1.8.0?deps=three@0.152.0';
+        import * as THREE from 'https://esm.sh/three@0.152.0';
+
+        const elem = document.getElementById('3d-graph');
+        let highlightNodes = new Set();
+        let highlightLinks = new Set();
+        let hoverNode = null;
+        let selectedNode = null;
+
+        // Initialize Graph
+        const Graph = ForceGraph3D()(elem)
+            .backgroundColor('#000000')
+            .showNavInfo(false)
+            
+            // 3D Spheres with Labels
+            .nodeThreeObject(node => {
+                const group = new THREE.Group();
+                const isDimmed = highlightNodes.size > 0 && !highlightNodes.has(node);
+                
+                // Create sphere
+                const radius = 2 + Math.sqrt(node.val) * 0.8;
+                const geometry = new THREE.SphereGeometry(radius, 16, 16);
+                const material = new THREE.MeshLambertMaterial({
+                    color: 0xffffff,
+                    transparent: true,
+                    opacity: isDimmed ? 0.1 : 0.85
+                });
+                const sphere = new THREE.Mesh(geometry, material);
+                group.add(sphere);
+                
+                // Create label on sphere surface - balloon style
+                // Wrap text to fit within sphere
+                const maxCharsPerLine = Math.max(4, Math.floor(radius * 1.5));
+                const words = node.name.split(' ');
+                const lines = [];
+                let currentLine = '';
+                
+                words.forEach(word => {
+                    if ((currentLine + ' ' + word).trim().length <= maxCharsPerLine) {
+                        currentLine = (currentLine + ' ' + word).trim();
+                    } else {
+                        if (currentLine) lines.push(currentLine);
+                        currentLine = word;
+                    }
+                });
+                if (currentLine) lines.push(currentLine);
+                
+                const wrappedName = lines.join('\n');
+                const sprite = new SpriteText(wrappedName);
+                sprite.color = isDimmed ? 'rgba(0,0,0,0.05)' : '#000000';
+                sprite.fontWeight = 'bold';
+                // Scale text to fit within sphere
+                const lineCount = lines.length;
+                const longestLine = Math.max(...lines.map(l => l.length));
+                sprite.textHeight = Math.min(radius * 0.7 / lineCount, (radius * 1.6) / Math.max(longestLine * 0.5, 1));
+                sprite.position.z = radius * 0.1;
+                sprite.material.depthTest = false;
+                group.add(sprite);
+                
+                return group;
+            })
+            
+            // Curved links
+            .linkCurvature(0.25)
+            .linkCurveRotation(link => Math.random() * Math.PI)
+            
+            // 2. Visible Edges with labels
+            .linkThreeObjectExtend(true)
+            .linkThreeObject(link => {
+                if (highlightLinks.has(link) && link.name) {
+                    const sprite = new SpriteText(link.name);
+                    sprite.color = '#ff4444';
+                    sprite.backgroundColor = 'rgba(0,0,0,0.7)';
+                    sprite.padding = 2;
+                    sprite.textHeight = 2.5;
+                    sprite.material.depthTest = false;
+                    sprite.renderOrder = 10;
+                    return sprite;
+                }
+                return null;
+            })
+            .linkPositionUpdate((sprite, { start, end }, link) => {
+                if (sprite && sprite.isSprite) {
+                    // Position at midpoint of edge
+                    sprite.position.set(
+                        (start.x + end.x) / 2,
+                        (start.y + end.y) / 2,
+                        (start.z + end.z) / 2
+                    );
+                }
+            })
+            .linkColor(link => highlightLinks.has(link) ? '#ffffff' : 'rgba(255,255,255,0.15)')
+            .linkWidth(link => highlightLinks.has(link) ? 2 : 0.5)
+            .linkOpacity(0.5)
+            
+            .onNodeClick(node => {
+                selectedNode = node;
+                highlightNodes.clear();
+                highlightLinks.clear();
+                
+                if (node) {
+                    highlightNodes.add(node);
+                    node.neighbors.forEach(neighbor => highlightNodes.add(neighbor));
+                    node.links.forEach(link => highlightLinks.add(link));
+                    
+                    updateInfoPanel(node);
+                    document.getElementById('reset-btn').style.display = 'inline-block';
+                }
+                
+                // Force update of nodes (re-run nodeThreeObject)
+                Graph.nodeThreeObject(Graph.nodeThreeObject());
+                // Force update of links
+                Graph.linkThreeObject(Graph.linkThreeObject());
+            })
+            .onBackgroundClick(() => {
+                resetHighlight();
+            });
+
+        // Add lighting for spheres
+        const scene = Graph.scene();
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(100, 100, 100);
+        scene.add(directionalLight);
+
+        function updateInfoPanel(node) {
+            document.getElementById('info-panel').style.display = 'block';
+            document.getElementById('node-name').innerText = node.name;
+            document.getElementById('node-degree').innerText = node.val;
+        }
+
+        function resetHighlight() {
+            selectedNode = null;
+            highlightNodes.clear();
+            highlightLinks.clear();
+            document.getElementById('reset-btn').style.display = 'none';
+            document.getElementById('info-panel').style.display = 'none';
+            Graph.nodeThreeObject(Graph.nodeThreeObject());
+            Graph.linkThreeObject(Graph.linkThreeObject());
+        }
+        
+        document.getElementById('reset-btn').addEventListener('click', resetHighlight);
+
+        // Load Data
+        fetch('graph_data.json')
+            .then(res => {
+                if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
+                return res.json();
+            })
+            .then(data => {
+                console.log("Data loaded:", data.nodes.length, "nodes");
+                document.getElementById('loading-text').innerText = "Building Topology...";
+
+                // Pre-process neighbors for fast highlighting
+                const nodesById = Object.fromEntries(data.nodes.map(node => [node.id, node]));
+                
+                data.nodes.forEach(node => {
+                    node.neighbors = [];
+                    node.links = [];
+                });
+
+                data.links.forEach(link => {
+                    const a = nodesById[link.source];
+                    const b = nodesById[link.target];
+                    if (a && b) {
+                        a.neighbors.push(b);
+                        b.neighbors.push(a);
+                        a.links.push(link);
+                        b.links.push(link);
+                    }
+                });
+
+                Graph.graphData(data);
+                
+                Graph.d3Force('charge').strength(-20);
+                Graph.d3Force('link').distance(30);
+
+                setTimeout(() => {
+                    document.getElementById('loading').style.display = 'none';
+                }, 1000);
+            })
+            .catch(err => {
+                console.error(err);
+                document.getElementById('loading-text').innerText = "Error";
+                document.getElementById('error-msg').style.display = 'block';
+                document.getElementById('error-msg').innerText = err.message + ". See console.";
+            });
+    </script>
+</body>
+</html>
