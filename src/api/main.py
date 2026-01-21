@@ -15,11 +15,20 @@ from .ws import router as ws_router, set_agent
 
 
 # --- Pydantic Models ---
+class ScopeRequest(BaseModel):
+    authors: list[str] = []
+    titles: list[str] = []
+    traditions: list[str] = []
+    domains: list[str] = []
+    strict: bool = True
+
+
 class QueryRequest(BaseModel):
     question: str
     max_hops: int = 2
     max_context_chunks: int = 12
     use_community_routing: bool = True
+    scope: ScopeRequest | None = None
 
 
 class QueryResponse(BaseModel):
@@ -45,9 +54,12 @@ state = AppState()
 
 def init_components():
     """Initialize all components (called at startup)."""
+    from ..config import setup_logging
+    setup_logging()
+    
     from openai import OpenAI
     from ..storage import DuckDBStorage
-from ..graph import GraphBuilder, GraphTraverser, GraphFilters
+    from ..graph import GraphBuilder, GraphTraverser, GraphFilters
     from ..rag import VectorSearch, ResultFusion, CitationBuilder
     from ..agents import MultiHopAgent
 
@@ -85,8 +97,8 @@ from ..graph import GraphBuilder, GraphTraverser, GraphFilters
     fusion = ResultFusion(state.storage)
     citation_builder = CitationBuilder(state.storage, state.node_to_community)
 
-    # Initialize filters for traversal and seeding
-    filters = GraphFilters(G, hub_threshold_pct=0.01, min_degree=1)
+    # Initialize filters for traversal and seeding (uses precomputed conceptness scores)
+    filters = GraphFilters(G, storage=state.storage, hub_threshold_pct=0.01, min_degree=1)
     traverser = GraphTraverser(G, state.node_to_community, filters=filters)
 
     state.agent = MultiHopAgent(
@@ -147,14 +159,28 @@ def create_app() -> FastAPI:
     @app.post("/api/query", response_model=QueryResponse)
     async def query(request: QueryRequest):
         """Execute a GraphRAG query."""
+        from ..agents import Scope
+        
         if not state.ready or not state.agent:
             raise HTTPException(status_code=503, detail="Agent not initialized")
+
+        # Build scope if provided
+        scope = None
+        if request.scope:
+            scope = Scope(
+                authors=request.scope.authors,
+                titles=request.scope.titles,
+                traditions=request.scope.traditions,
+                domains=request.scope.domains,
+                strict=request.scope.strict,
+            )
 
         result = state.agent.query(
             question=request.question,
             max_hops=request.max_hops,
             max_context_chunks=request.max_context_chunks,
             use_community_routing=request.use_community_routing,
+            scope=scope,
         )
         return result
 

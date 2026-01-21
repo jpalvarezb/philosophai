@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from ..storage import DuckDBStorage
     from ..graph import GraphBuilder
     from ..rag import VectorSearch
+    from .scope import Scope, ScopeFilter
 
 
 @dataclass
@@ -164,6 +165,166 @@ class AgentTools:
         except Exception as e:
             return ToolResult(
                 tool_name="get_entities_from_chunks",
+                success=False,
+                data=None,
+                message=str(e),
+            )
+
+    def set_scope(
+        self,
+        authors: list[str] | None = None,
+        titles: list[str] | None = None,
+        traditions: list[str] | None = None,
+        domains: list[str] | None = None,
+    ) -> ToolResult:
+        """
+        Restrict retrieval to specific authors, works, traditions, or domains.
+        
+        Use this when the query asks specifically about one philosopher's view,
+        a particular text, or a specific tradition. Do NOT use when:
+        - Query asks about influence/reception (need commentators)
+        - Query compares multiple traditions broadly
+        - Query is open-ended ("what do philosophers think about X")
+        
+        Args:
+            authors: List of author names (e.g., ["Aristotle", "Plato"])
+            titles: List of work titles (e.g., ["Republic", "On the Soul (De Anima)"])
+            traditions: List of traditions (e.g., ["Greek–Hellenistic", "Indian"])
+            domains: List of domains (e.g., ["Ethics", "Metaphysics"])
+        
+        Valid values:
+            authors: Aristotle, Plato, Augustine, Immanuel Kant, David Hume, Seneca,
+                     Confucius, Laozi, Vyasa, Shankara, Nagarjuna, Al-Ghazali, Maimonides, etc.
+            titles: Republic, Nicomachean Ethics, On the Soul (De Anima), Metaphysics,
+                    Critique of Pure Reason, Confessions, Bhagavad Gita, Dao De Jing, etc.
+            traditions: Greek–Hellenistic, Indian, Chinese, Japanese, Modern European,
+                        Christian, Islamic, Jewish
+            domains: Ethics, Metaphysics, Epistemology, Theology, Anthropology, History
+        
+        Returns:
+            Scope object with chunk count in scope
+        """
+        from .scope import Scope, ScopeFilter, VALID_AUTHORS, VALID_TRADITIONS, VALID_DOMAINS
+        
+        # Validate inputs
+        invalid_authors = [a for a in (authors or []) if a not in VALID_AUTHORS]
+        invalid_traditions = [t for t in (traditions or []) if t not in VALID_TRADITIONS]
+        invalid_domains = [d for d in (domains or []) if d not in VALID_DOMAINS]
+        
+        warnings = []
+        if invalid_authors:
+            warnings.append(f"Unknown authors: {invalid_authors}")
+        if invalid_traditions:
+            warnings.append(f"Unknown traditions: {invalid_traditions}")
+        if invalid_domains:
+            warnings.append(f"Unknown domains: {invalid_domains}")
+        
+        # Create scope with valid values only
+        scope = Scope(
+            authors=[a for a in (authors or []) if a in VALID_AUTHORS],
+            titles=titles or [],  # Titles are flexible, don't validate strictly
+            traditions=[t for t in (traditions or []) if t in VALID_TRADITIONS],
+            domains=[d for d in (domains or []) if d in VALID_DOMAINS],
+            strict=True,
+        )
+        
+        if scope.is_empty():
+            return ToolResult(
+                tool_name="set_scope",
+                success=False,
+                data=None,
+                message="No valid scope constraints provided. " + "; ".join(warnings) if warnings else "",
+            )
+        
+        # Calculate chunk count
+        scope_filter = ScopeFilter(self.storage, scope)
+        chunk_count = scope_filter.get_scoped_chunk_count()
+        text_ids = scope_filter.get_text_ids()
+        
+        return ToolResult(
+            tool_name="set_scope",
+            success=True,
+            data={
+                "scope": scope.to_dict(),
+                "chunk_count": chunk_count,
+                "text_count": len(text_ids),
+                "description": scope.describe(),
+            },
+            message=f"Scope set: {scope.describe()}. {chunk_count:,} chunks from {len(text_ids)} texts available." + 
+                    (f" Warnings: {'; '.join(warnings)}" if warnings else ""),
+        )
+    
+    def list_available_sources(self, category: str = "authors") -> ToolResult:
+        """
+        List available sources for scoping.
+        
+        Args:
+            category: One of "authors", "titles", "traditions", "domains"
+        
+        Returns:
+            List of valid values for the category with chunk counts
+        """
+        try:
+            if category == "authors":
+                rows = self.storage.con.execute("""
+                    SELECT f.author_source, COUNT(DISTINCT c.chunk_id) as chunks
+                    FROM files f
+                    JOIN chunks c ON f.text_id = c.text_id
+                    GROUP BY f.author_source
+                    ORDER BY chunks DESC
+                """).fetchall()
+                data = [{"name": r[0], "chunks": r[1]} for r in rows]
+            
+            elif category == "titles":
+                rows = self.storage.con.execute("""
+                    SELECT f.title, f.author_source, COUNT(DISTINCT c.chunk_id) as chunks
+                    FROM files f
+                    JOIN chunks c ON f.text_id = c.text_id
+                    GROUP BY f.title, f.author_source
+                    ORDER BY f.author_source, f.title
+                """).fetchall()
+                data = [{"title": r[0], "author": r[1], "chunks": r[2]} for r in rows]
+            
+            elif category == "traditions":
+                rows = self.storage.con.execute("""
+                    SELECT f.tradition, COUNT(DISTINCT c.chunk_id) as chunks
+                    FROM files f
+                    JOIN chunks c ON f.text_id = c.text_id
+                    GROUP BY f.tradition
+                    ORDER BY chunks DESC
+                """).fetchall()
+                data = [{"name": r[0], "chunks": r[1]} for r in rows]
+            
+            elif category == "domains":
+                # Domains are semicolon-separated
+                rows = self.storage.con.execute("""
+                    SELECT TRIM(domain) as domain, COUNT(*) as file_count
+                    FROM (
+                        SELECT UNNEST(string_split(domains, ';')) as domain
+                        FROM files
+                    )
+                    GROUP BY 1
+                    ORDER BY file_count DESC
+                """).fetchall()
+                data = [{"name": r[0], "files": r[1]} for r in rows]
+            
+            else:
+                return ToolResult(
+                    tool_name="list_available_sources",
+                    success=False,
+                    data=None,
+                    message=f"Unknown category: {category}. Use 'authors', 'titles', 'traditions', or 'domains'.",
+                )
+            
+            return ToolResult(
+                tool_name="list_available_sources",
+                success=True,
+                data={"category": category, "items": data},
+                message=f"Found {len(data)} {category}.",
+            )
+        except Exception as e:
+            return ToolResult(
+                tool_name="list_available_sources",
                 success=False,
                 data=None,
                 message=str(e),

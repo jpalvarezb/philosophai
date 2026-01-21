@@ -3,6 +3,7 @@ from .communities import CommunityDetector
 from .reports import CommunityReportGenerator, CommunityReporter
 from .traversal import GraphTraverser
 from .filters import GraphFilters
+from .conceptness import ConceptnessScorer, compute_conceptness_scores
 
 __all__ = [
     "GraphBuilder",
@@ -11,4 +12,6 @@ __all__ = [
     "CommunityReporter",
     "GraphTraverser",
     "GraphFilters",
+    "ConceptnessScorer",
+    "compute_conceptness_scores",
 ]

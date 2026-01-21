@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import networkx as nx
+    from ..storage import DuckDBStorage
 
 
 # Generic concepts that shouldn't anchor traversal
@@ -76,6 +77,7 @@ BLOCKED_PREDICATES = frozenset({
     "see", "cf", "viz", "etc", "ie", "eg",
 })
 
+
 # Common function words for label quality check
 FUNCTION_WORDS = frozenset({
     "the", "a", "an", "of", "to", "in", "for", "on", "with", "at", "by",
@@ -98,8 +100,10 @@ class GraphFilters:
     """
     Configurable filters for graph traversal and seeding.
     
+    Uses precomputed conceptness scores from entity_conceptness table.
+    
     Usage:
-        filters = GraphFilters(graph, hub_threshold_pct=0.01)
+        filters = GraphFilters(graph, storage, min_conceptness_pct=0.30)
         if filters.is_valid_seed(entity_id):
             seeds.append(entity_id)
     """
@@ -107,27 +111,42 @@ class GraphFilters:
     def __init__(
         self,
         graph: "nx.MultiDiGraph",
+        storage: "DuckDBStorage | None" = None,
         hub_threshold_pct: float = 0.01,
         min_degree: int = 1,
+        min_conceptness_pct: float = 0.30,
+        min_support: float = 2.0,
         stop_labels: frozenset[str] | None = None,
         generic_predicates: frozenset[str] | None = None,
     ):
         """
         Args:
             graph: The knowledge graph
+            storage: DuckDB storage for conceptness lookups (optional)
             hub_threshold_pct: Nodes with degree > this % of total are hubs
             min_degree: Minimum degree for valid seeds
+            min_conceptness_pct: Percentile threshold for conceptness (0.30 = bottom 30% filtered)
+            min_support: Minimum support score for seeding (filters low-evidence entities)
             stop_labels: Custom stop entity labels (defaults to STOP_ENTITY_LABELS)
             generic_predicates: Custom generic predicates (defaults to GENERIC_PREDICATES)
         """
         self.graph = graph
+        self.storage = storage
         self.min_degree = min_degree
+        self.min_support = min_support
         self.stop_labels = stop_labels or STOP_ENTITY_LABELS
         self.generic_predicates = generic_predicates or GENERIC_PREDICATES
         
         # Compute hub threshold
         n_nodes = graph.number_of_nodes()
         self.hub_threshold = max(10, int(n_nodes * hub_threshold_pct))
+        
+        # Load conceptness scores and compute threshold
+        self._conceptness_scores: dict[str, float] = {}
+        self._support_scores: dict[str, float] = {}
+        self._conceptness_threshold: float = 0.0
+        if storage:
+            self._load_conceptness_scores(min_conceptness_pct)
     
     def is_stop_entity(self, entity_id: str) -> bool:
         """Check if entity is a generic stop concept."""
@@ -158,10 +177,78 @@ class GraphFilters:
             return False
         return self.graph.degree(entity_id) >= self.min_degree
     
+    def _load_conceptness_scores(self, min_pct: float):
+        """Load precomputed conceptness and support scores from DB."""
+        try:
+            # Load all scores into memory for fast lookups
+            rows = self.storage.con.execute("""
+                SELECT entity_id, conceptness, support
+                FROM entity_conceptness
+            """).fetchall()
+            self._conceptness_scores = {row[0]: row[1] for row in rows}
+            self._support_scores = {row[0]: row[2] for row in rows}
+            
+            # Get threshold at percentile
+            result = self.storage.con.execute(f"""
+                SELECT PERCENTILE_CONT({min_pct}) WITHIN GROUP (ORDER BY conceptness)
+                FROM entity_conceptness
+            """).fetchone()
+            self._conceptness_threshold = result[0] if result and result[0] else 0.0
+            
+            print(f"✅ Loaded {len(self._conceptness_scores):,} conceptness scores, threshold={self._conceptness_threshold:.3f}")
+        except Exception as e:
+            print(f"⚠️ Could not load conceptness scores: {e}")
+            self._conceptness_scores = {}
+            self._support_scores = {}
+            self._conceptness_threshold = 0.0
+    
     def is_generic_predicate(self, predicate: str) -> bool:
         """Check if predicate is too generic to be useful."""
         pred_lower = predicate.lower().strip()
         return pred_lower in self.generic_predicates
+    
+    def get_conceptness(self, entity_id: str) -> float:
+        """
+        Get precomputed conceptness score for an entity.
+        
+        Returns 0.0 if entity not found in precomputed scores.
+        """
+        return self._conceptness_scores.get(entity_id, 0.0)
+    
+    def get_support(self, entity_id: str) -> float:
+        """
+        Get precomputed support score for an entity.
+        
+        Returns 0.0 if entity not found in precomputed scores.
+        """
+        return self._support_scores.get(entity_id, 0.0)
+    
+    def passes_conceptness(self, entity_id: str, threshold_multiplier: float = 1.0, check_support: bool = True) -> bool:
+        """
+        Check if entity passes conceptness and support thresholds.
+        
+        Args:
+            entity_id: Entity to check
+            threshold_multiplier: Multiply threshold by this (use < 1.0 for lenient checks)
+            check_support: Also check minimum support threshold
+        
+        Returns:
+            True if passes both conceptness and (optionally) support thresholds
+        """
+        if not self._conceptness_scores:
+            return True  # No scores available, allow all
+        
+        score = self._conceptness_scores.get(entity_id, 0.0)
+        if score < self._conceptness_threshold * threshold_multiplier:
+            return False
+        
+        # Also check minimum support for low-evidence filtering
+        if check_support:
+            support = self._support_scores.get(entity_id, 0.0)
+            if support < self.min_support:
+                return False
+        
+        return True
     
     def is_valid_seed(self, entity_id: str) -> bool:
         """Check if entity is valid for seeding traversal."""
@@ -177,6 +264,9 @@ class GraphFilters:
         label = self.graph.nodes.get(entity_id, {}).get("label", entity_id)
         if self.is_low_quality_label(label):
             return False
+        # Check conceptness (embedding-based)
+        if not self.passes_conceptness(entity_id, threshold_multiplier=1.0):
+            return False
         return True
     
     def is_valid_expansion(self, entity_id: str) -> bool:
@@ -188,6 +278,9 @@ class GraphFilters:
         # Check label quality (filter extraction artifacts)
         label = self.graph.nodes.get(entity_id, {}).get("label", entity_id)
         if self.is_low_quality_label(label):
+            return False
+        # Check conceptness (slightly lower threshold for expansion)
+        if not self.passes_conceptness(entity_id, threshold_multiplier=0.8):
             return False
         # Allow hubs during expansion but deprioritize them
         return True

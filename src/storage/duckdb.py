@@ -61,16 +61,43 @@ class DuckDBStorage:
     # Vector search
     # -------------------------------------------------------------------------
     def vector_search_chunks(
-        self, query_embedding: list[float], limit: int = 10
+        self,
+        query_embedding: list[float],
+        limit: int = 10,
+        text_ids: set[int] | None = None,
     ) -> list[tuple[str, float]]:
-        """Find top-k chunks by cosine similarity. Returns (chunk_id, score)."""
-        sql = """
-            SELECT chunk_id, list_cosine_similarity(embedding, ?::DOUBLE[]) as score
-            FROM embedded_chunks
-            ORDER BY score DESC
-            LIMIT ?
         """
-        return self.con.execute(sql, [query_embedding, limit]).fetchall()
+        Find top-k chunks by cosine similarity.
+        
+        Args:
+            query_embedding: Query vector
+            limit: Max results to return
+            text_ids: If provided, restrict to chunks from these text_ids (scope filter)
+        
+        Returns:
+            List of (chunk_id, score) tuples
+        """
+        if text_ids is not None and len(text_ids) > 0:
+            # Scoped search: join with chunks table to filter by text_id
+            placeholders = ",".join(["?"] * len(text_ids))
+            sql = f"""
+                SELECT ec.chunk_id, list_cosine_similarity(ec.embedding, ?::DOUBLE[]) as score
+                FROM embedded_chunks ec
+                INNER JOIN chunks c ON ec.chunk_id = c.chunk_id
+                WHERE c.text_id IN ({placeholders})
+                ORDER BY score DESC
+                LIMIT ?
+            """
+            return self.con.execute(sql, [query_embedding] + list(text_ids) + [limit]).fetchall()
+        else:
+            # Unscoped search
+            sql = """
+                SELECT chunk_id, list_cosine_similarity(embedding, ?::DOUBLE[]) as score
+                FROM embedded_chunks
+                ORDER BY score DESC
+                LIMIT ?
+            """
+            return self.con.execute(sql, [query_embedding, limit]).fetchall()
 
     # -------------------------------------------------------------------------
     # Triples / Graph seeds
@@ -154,6 +181,112 @@ class DuckDBStorage:
             ORDER BY support DESC
         """, [u_id, v_id, v_id, u_id]).fetchall()
         return result
+
+    # -------------------------------------------------------------------------
+    # Scoped Graph Queries (for author/tradition/domain filtering)
+    # -------------------------------------------------------------------------
+    def get_scoped_edges(
+        self, chunk_ids: set[str]
+    ) -> set[tuple[str, str, str]]:
+        """
+        Get all edges that have provenance in the given chunks.
+        
+        An edge (subject, object, predicate) is "in scope" if at least one
+        of its supporting chunks is in the scoped set.
+        
+        Args:
+            chunk_ids: Set of chunk IDs defining the scope
+        
+        Returns:
+            Set of (subject_canon_id, object_canon_id, predicate_canon_id) tuples
+        """
+        if not chunk_ids:
+            return set()
+        
+        placeholders = ",".join(["?"] * len(chunk_ids))
+        sql = f"""
+            SELECT DISTINCT 
+                subject_canon_id, 
+                object_canon_id, 
+                predicate_canon_id
+            FROM normalized_triples_clean_canon
+            WHERE chunk_id IN ({placeholders})
+              AND object_canon_id IS NOT NULL 
+              AND object_canon_id != ''
+        """
+        results = self.con.execute(sql, list(chunk_ids)).fetchall()
+        return {(r[0], r[1], r[2]) for r in results}
+
+    def _get_scoped_entity_ids(self, chunk_ids: set[str]) -> set[str]:
+        """
+        Internal: Get all entity IDs that appear in edges supported by scoped chunks.
+        
+        A node is "in scope" if it participates in at least one in-scope edge.
+        This is used internally by derive_scoped_communities.
+        
+        Note: For traversal, entity scope should be derived from scoped_edges as V(E),
+        not queried separately.
+        
+        Args:
+            chunk_ids: Set of chunk IDs defining the scope
+        
+        Returns:
+            Set of entity IDs (both subjects and objects)
+        """
+        if not chunk_ids:
+            return set()
+        
+        placeholders = ",".join(["?"] * len(chunk_ids))
+        sql = f"""
+            SELECT DISTINCT subject_canon_id FROM normalized_triples_clean_canon 
+            WHERE chunk_id IN ({placeholders})
+              AND object_canon_id IS NOT NULL AND object_canon_id != ''
+            UNION
+            SELECT DISTINCT object_canon_id FROM normalized_triples_clean_canon 
+            WHERE chunk_id IN ({placeholders})
+              AND object_canon_id IS NOT NULL AND object_canon_id != ''
+        """
+        results = self.con.execute(sql, list(chunk_ids) * 2).fetchall()
+        return {r[0] for r in results if r[0]}
+
+    def derive_scoped_communities(
+        self,
+        chunk_ids: set[str],
+        node_to_community: dict[str, int],
+        top_n: int = 5,
+    ) -> list[tuple[int, int]]:
+        """
+        Derive relevant communities from scoped chunks.
+        
+        Maps: scoped chunks -> entities in those chunks -> their global communities
+        -> ranked by overlap count.
+        
+        This replaces global community report routing for scoped queries.
+        
+        Args:
+            chunk_ids: Set of chunk IDs defining the scope
+            node_to_community: Global node->community mapping
+            top_n: Number of top communities to return
+        
+        Returns:
+            List of (community_id, entity_count) tuples, sorted by count desc
+        """
+        if not chunk_ids:
+            return []
+        
+        # Get entities from scoped chunks (internal helper)
+        entity_ids = self._get_scoped_entity_ids(chunk_ids)
+        
+        # Count entities per community
+        from collections import Counter
+        community_counts: Counter[int] = Counter()
+        for entity_id in entity_ids:
+            comm_id = node_to_community.get(entity_id)
+            if comm_id is not None:
+                community_counts[comm_id] += 1
+        
+        # Return top N communities by entity count
+        return community_counts.most_common(top_n)
 
     # -------------------------------------------------------------------------
     # Communities (to be populated later)
@@ -328,24 +461,69 @@ class DuckDBStorage:
             return pd.DataFrame()
 
     def vector_search_community_reports(
-        self, query_embedding: list[float], limit: int = 5
+        self,
+        query_embedding: list[float],
+        limit: int = 5,
+        text_ids: set[int] | None = None,
     ) -> list[tuple[int, float, list[str]]]:
         """
         Find top-k community reports by embedding similarity.
-        Returns: list of (comm_id, score, cited_chunk_ids)
+        
+        Args:
+            query_embedding: Query vector
+            limit: Max results to return
+            text_ids: If provided, filter cited_chunk_ids to only those from these texts
+        
+        Returns:
+            List of (comm_id, score, cited_chunk_ids) tuples.
+            When text_ids is provided, cited_chunk_ids are pre-filtered at SQL level.
         """
         try:
-            sql = """
-                SELECT 
-                    comm_id, 
-                    list_cosine_similarity(report_embedding, ?::DOUBLE[]) as score,
-                    cited_chunk_ids
-                FROM community_reports
-                WHERE report_embedding IS NOT NULL
-                ORDER BY score DESC
-                LIMIT ?
-            """
-            return self.con.execute(sql, [query_embedding, limit]).fetchall()
+            if text_ids is not None and len(text_ids) > 0:
+                # Scoped search: filter cited_chunk_ids at SQL level
+                text_placeholders = ",".join(["?"] * len(text_ids))
+                sql = f"""
+                    WITH ranked_reports AS (
+                        SELECT 
+                            comm_id, 
+                            list_cosine_similarity(report_embedding, ?::DOUBLE[]) as score,
+                            cited_chunk_ids
+                        FROM community_reports
+                        WHERE report_embedding IS NOT NULL
+                        ORDER BY score DESC
+                        LIMIT ?
+                    ),
+                    in_scope_chunks AS (
+                        SELECT chunk_id FROM chunks WHERE text_id IN ({text_placeholders})
+                    )
+                    SELECT 
+                        r.comm_id,
+                        r.score,
+                        ARRAY_AGG(uc.chunk_id) FILTER (WHERE uc.chunk_id IS NOT NULL) as cited_chunk_ids
+                    FROM ranked_reports r
+                    LEFT JOIN LATERAL UNNEST(r.cited_chunk_ids) AS uc(chunk_id) ON TRUE
+                    LEFT JOIN in_scope_chunks isc ON uc.chunk_id = isc.chunk_id
+                    WHERE uc.chunk_id IS NULL OR isc.chunk_id IS NOT NULL
+                    GROUP BY r.comm_id, r.score
+                    ORDER BY r.score DESC
+                """
+                params = [query_embedding, limit] + list(text_ids)
+                results = self.con.execute(sql, params).fetchall()
+                # Convert None to empty list for cited_chunk_ids
+                return [(r[0], r[1], r[2] if r[2] else []) for r in results]
+            else:
+                # Unscoped search
+                sql = """
+                    SELECT 
+                        comm_id, 
+                        list_cosine_similarity(report_embedding, ?::DOUBLE[]) as score,
+                        cited_chunk_ids
+                    FROM community_reports
+                    WHERE report_embedding IS NOT NULL
+                    ORDER BY score DESC
+                    LIMIT ?
+                """
+                return self.con.execute(sql, [query_embedding, limit]).fetchall()
         except Exception:
             # Table doesn't exist yet
             return []

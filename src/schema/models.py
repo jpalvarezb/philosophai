@@ -67,6 +67,13 @@ class TraversalTrace:
     visited_communities: set[int] = field(default_factory=set)
     collected_chunk_ids: list[str] = field(default_factory=list)
     max_depth: int = 0  # Track max hop depth reached
+    
+    # Diagnostic counters from traverser
+    filtered_low_quality: int = 0
+    filtered_blocked_pred: int = 0
+    filtered_community: int = 0
+    filtered_out_of_scope_edges: int = 0  # Edges skipped due to scope filtering
+    stopped_by_chunk_cap: bool = False
 
     def add_step(self, step: TraversalStep):
         self.steps.append(step)

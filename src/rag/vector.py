@@ -55,6 +55,7 @@ class VectorSearch:
         query: str,
         chunk_limit: int = 10,
         community_limit: int = 5,
+        text_ids: set[int] | None = None,
     ) -> VectorSearchResult:
         """
         Search both chunks and community summaries.
@@ -63,18 +64,21 @@ class VectorSearch:
             query: Search query text
             chunk_limit: Max chunks to return
             community_limit: Max communities to return
+            text_ids: If provided, restrict chunks to those from these text_ids (scope filter)
         
         Returns:
             VectorSearchResult with ranked chunks and communities
         """
         query_embedding = self.get_embedding(query)
 
-        # Search chunks
-        chunk_results = self.storage.vector_search_chunks(query_embedding, limit=chunk_limit)
+        # Search chunks (scoped if text_ids provided)
+        chunk_results = self.storage.vector_search_chunks(
+            query_embedding, limit=chunk_limit, text_ids=text_ids
+        )
         chunk_ids = [r[0] for r in chunk_results]
         chunk_scores = [r[1] for r in chunk_results]
 
-        # Search communities
+        # Search communities (unscoped - communities aggregate across texts)
         community_results = self.storage.vector_search_communities(
             query_embedding, limit=community_limit
         )
@@ -93,15 +97,23 @@ class VectorSearch:
         self,
         query: str,
         limit: int = 10,
+        text_ids: set[int] | None = None,
     ) -> tuple[list[str], list[float], list[float]]:
         """
         Search only chunks (fallback if communities not built).
+        
+        Args:
+            query: Search query text
+            limit: Max chunks to return
+            text_ids: If provided, restrict chunks to those from these text_ids (scope filter)
         
         Returns:
             (chunk_ids, scores, query_embedding)
         """
         query_embedding = self.get_embedding(query)
-        results = self.storage.vector_search_chunks(query_embedding, limit=limit)
+        results = self.storage.vector_search_chunks(
+            query_embedding, limit=limit, text_ids=text_ids
+        )
         chunk_ids = [r[0] for r in results]
         scores = [r[1] for r in results]
         return chunk_ids, scores, query_embedding
@@ -110,6 +122,7 @@ class VectorSearch:
         self,
         query: str,
         limit: int = 5,
+        text_ids: set[int] | None = None,
     ) -> "CommunityReportSearchResult":
         """
         Search community reports for GraphRAG routing.
@@ -117,12 +130,16 @@ class VectorSearch:
         Args:
             query: Search query
             limit: Max communities to return
+            text_ids: If provided, filter cited chunks to those from these text_ids (scope filter)
         
         Returns:
-            CommunityReportSearchResult with community IDs, scores, and cited chunks
+            CommunityReportSearchResult with community IDs, scores, and cited chunks.
+            When text_ids provided, cited_chunk_ids are pre-filtered at SQL level.
         """
         query_embedding = self.get_embedding(query)
-        results = self.storage.vector_search_community_reports(query_embedding, limit=limit)
+        results = self.storage.vector_search_community_reports(
+            query_embedding, limit=limit, text_ids=text_ids
+        )
         
         community_ids = []
         community_scores = []

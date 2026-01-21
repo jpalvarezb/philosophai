@@ -197,13 +197,20 @@ class ResultFusion:
     def get_context_with_selection(
         self,
         query: str,
-        report_result: "CommunityReportSearchResult | None",
+        report_cited_chunks: list[str],
         vector_chunks: list[str],
         trace: "TraversalTrace | None",
         max_context: int = MAX_CONTEXT_CHUNKS,
     ) -> tuple[list[tuple[str, str]], list[str], dict[str, float]]:
         """
         High-level method: select context and fetch content.
+        
+        Args:
+            query: Original question
+            report_cited_chunks: Chunks from community reports (already scope-filtered)
+            vector_chunks: Chunks from vector search (already scope-filtered)
+            trace: TraversalTrace with collected chunks (already scope-filtered)
+            max_context: Maximum chunks for LLM context
         
         Returns:
             (context_texts, all_collected_ids, context_scores)
@@ -213,11 +220,7 @@ class ResultFusion:
         """
         # Gather all collected chunks (for UI)
         all_collected = set(vector_chunks)
-        
-        report_cited = []
-        if report_result:
-            report_cited = report_result.cited_chunk_ids
-            all_collected.update(report_cited)
+        all_collected.update(report_cited_chunks)
         
         traversal_chunks = []
         traversal_scores = {}
@@ -233,7 +236,7 @@ class ResultFusion:
         # Select context
         context_ids, context_scores = self.select_context_chunks(
             query=query,
-            report_cited_chunks=report_cited,
+            report_cited_chunks=report_cited_chunks,
             traversal_chunks=traversal_chunks,
             traversal_chunk_scores=traversal_scores,
             vector_search_chunks=vector_chunks,

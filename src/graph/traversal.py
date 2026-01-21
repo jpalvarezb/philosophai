@@ -66,7 +66,10 @@ class GraphTraverser:
         max_nodes: int = 50,
         seed_cap: int = 20,
         beam_width: int = 25,
+        max_collected_chunks: int = 120,
         restrict_to_communities: bool = False,
+        scoped_chunks: set[str] | None = None,
+        scoped_edges: set[tuple[str, str, str]] | None = None,
     ) -> "TraversalTrace":
         """
         Perform best-first traversal from seed nodes.
@@ -78,7 +81,12 @@ class GraphTraverser:
             max_nodes: Stop after visiting this many expansion nodes
             seed_cap: Maximum seeds to use (prevents budget exhaustion)
             beam_width: Max nodes to expand per depth level
+            max_collected_chunks: Stop traversal after collecting this many chunks
             restrict_to_communities: If True, strictly stay within target communities
+            scoped_chunks: If provided, only collect chunks in this set (scope filter)
+            scoped_edges: If provided, only traverse edges in this set (strict scope).
+                          Format: set of (subject_id, object_id, predicate_id) tuples.
+                          Entity scope is derived as V(scoped_edges).
         
         Returns:
             TraversalTrace with visited nodes, edges, and collected chunks
@@ -113,6 +121,19 @@ class GraphTraverser:
         self._filtered_low_quality = 0
         self._filtered_blocked_pred = 0
         self._filtered_community = 0
+        self._filtered_out_of_scope_edges = 0  # Edges skipped due to scope
+        self._stopped_by_chunk_cap = False
+        self._scoped_chunks = scoped_chunks  # For _get_edge_chunks filtering
+        self._scoped_edges = scoped_edges  # For edge-level scope filtering
+        
+        # Derive scoped_entity_ids from scoped_edges (V(E))
+        # This is a cache, not a separate authority
+        self._scoped_entity_ids: set[str] | None = None
+        if scoped_edges is not None:
+            self._scoped_entity_ids = set()
+            for subj, obj, _ in scoped_edges:
+                self._scoped_entity_ids.add(subj)
+                self._scoped_entity_ids.add(obj)
 
         # Initialize heap with capped seeds (seeds are depth=0)
         seeds_added = 0
@@ -120,6 +141,10 @@ class GraphTraverser:
             if seeds_added >= seed_cap:
                 break
             if node_id not in self.graph:
+                continue
+            
+            # In scoped mode, skip seeds not in V(scoped_edges)
+            if self._scoped_entity_ids is not None and node_id not in self._scoped_entity_ids:
                 continue
             
             community_id = self.node_to_community.get(node_id)
@@ -146,6 +171,11 @@ class GraphTraverser:
         nodes_at_depth: dict[int, int] = {}  # Track beam width per depth
 
         while heap and expansion_count < max_nodes:
+            # Check chunk collection cap
+            if len(trace.collected_chunk_ids) >= max_collected_chunks:
+                self._stopped_by_chunk_cap = True
+                break
+            
             current = heapq.heappop(heap)
 
             if current.node_id in visited:
@@ -195,7 +225,7 @@ class GraphTraverser:
                 self._expand_node(
                     current.node_id,
                     current.depth,
-                    target_set,
+                    target_communities,
                     visited,
                     heap,
                     restrict_to_communities,
@@ -205,6 +235,8 @@ class GraphTraverser:
         trace.filtered_low_quality = self._filtered_low_quality
         trace.filtered_blocked_pred = self._filtered_blocked_pred
         trace.filtered_community = self._filtered_community
+        trace.filtered_out_of_scope_edges = self._filtered_out_of_scope_edges
+        trace.stopped_by_chunk_cap = self._stopped_by_chunk_cap
         
         return trace
 
@@ -267,6 +299,11 @@ class GraphTraverser:
             if neighbor_id in visited:
                 continue
             
+            # Scoped entity filter: skip neighbors not in scoped entity set
+            if self._scoped_entity_ids is not None and neighbor_id not in self._scoped_entity_ids:
+                self._filtered_out_of_scope_edges += 1
+                continue
+            
             # Filter check: skip stop entities during expansion
             if self.filters and not self.filters.is_valid_expansion(neighbor_id):
                 self._filtered_low_quality += 1
@@ -279,11 +316,22 @@ class GraphTraverser:
                 self._filtered_community += 1
                 continue
 
-            # Get best edge to this neighbor (by weight, with predicate quality)
+            # Get best IN-SCOPE edge to this neighbor (by weight, with predicate quality)
             edges = self.graph[node_id][neighbor_id]
             best_edge_key = None
             best_score = -1
+            
             for key in edges:
+                # Check if this specific edge is in scope
+                if self._scoped_edges is not None:
+                    # Edge must be in scoped_edges set (check both directions for undirected semantics)
+                    edge_in_scope = (
+                        (node_id, neighbor_id, key) in self._scoped_edges or
+                        (neighbor_id, node_id, key) in self._scoped_edges
+                    )
+                    if not edge_in_scope:
+                        continue  # Skip this edge, try others
+                
                 weight = edges[key].get("weight", 1)
                 label = edges[key].get("label", key)
                 modifier = self.filters.edge_weight_modifier(label) if self.filters else 1.0
@@ -293,6 +341,9 @@ class GraphTraverser:
                     best_edge_key = key
             
             if best_edge_key is None:
+                # No in-scope edges to this neighbor
+                if self._scoped_edges is not None:
+                    self._filtered_out_of_scope_edges += 1
                 continue
                 
             edge_data = edges[best_edge_key]
@@ -322,7 +373,11 @@ class GraphTraverser:
             )
 
     def _get_edge_chunks(self, from_id: str, to_id: str, predicate: str | None) -> list[str]:
-        """Get chunk IDs from an edge."""
+        """
+        Get chunk IDs from an edge.
+        
+        If scoped_chunk_ids was provided to traverse(), only returns chunks in that set.
+        """
         if from_id not in self.graph or to_id not in self.graph[from_id]:
             return []
         edges = self.graph[from_id][to_id]
@@ -330,7 +385,12 @@ class GraphTraverser:
         for key, data in edges.items():
             if predicate is None or key == predicate or data.get("label") == predicate:
                 all_chunks.extend(data.get("chunks", []))
-        return list(set(all_chunks))
+        unique_chunks = list(set(all_chunks))
+        
+        # Apply scope filter if set
+        if self._scoped_chunks is not None:
+            return [c for c in unique_chunks if c in self._scoped_chunks]
+        return unique_chunks
 
     def _get_label(self, node_id: str) -> str:
         """Get human-readable label for a node."""
