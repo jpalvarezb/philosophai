@@ -4,6 +4,7 @@ from __future__ import annotations
 import heapq
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from ..config.logging import trace_logger, TRACE_TRAVERSAL, TRACE_MAX_STEPS, TRACE_VERBOSE, TRACE_MAX_ITEMS
 
 if TYPE_CHECKING:
     import networkx as nx
@@ -99,6 +100,11 @@ class GraphTraverser:
             seed_nodes=seed_nodes[:seed_cap],
             seed_communities=target_communities,
         )
+        if TRACE_TRAVERSAL:
+            trace_logger.traversal(
+                f"start seeds={len(seed_nodes)} target_communities={target_communities[:TRACE_MAX_ITEMS]} "
+                f"max_hops={max_hops} max_nodes={max_nodes} beam_width={beam_width}"
+            )
 
         # Extract query tokens for relevance scoring during expansion
         if query:
@@ -116,6 +122,7 @@ class GraphTraverser:
         
         # Track expansion count separately from seed processing
         expansion_count = 0
+        self._trace_step_count = 0
         
         # Diagnostic counters (instance vars for access in _expand_node)
         self._filtered_low_quality = 0
@@ -166,6 +173,8 @@ class GraphTraverser:
                 ),
             )
             seeds_added += 1
+            if TRACE_TRAVERSAL and seeds_added <= TRACE_MAX_ITEMS:
+                trace_logger.traversal(f"seed_added node={node_id} score={score:.3f} community={community_id}")
 
         step_number = 0
         nodes_at_depth: dict[int, int] = {}  # Track beam width per depth
@@ -219,6 +228,12 @@ class GraphTraverser:
             )
             trace.add_step(step)
             step_number += 1
+            if TRACE_TRAVERSAL and self._trace_step_count < TRACE_MAX_STEPS:
+                trace_logger.traversal(
+                    f"step={step_number} node={current.node_id} depth={current.depth} "
+                    f"score={current.score:.3f} edge={current.edge_label} chunks={len(edge_chunks)}"
+                )
+                self._trace_step_count += 1
 
             # Expand neighbors if within depth limit
             if current.depth < max_hops:
@@ -237,6 +252,15 @@ class GraphTraverser:
         trace.filtered_community = self._filtered_community
         trace.filtered_out_of_scope_edges = self._filtered_out_of_scope_edges
         trace.stopped_by_chunk_cap = self._stopped_by_chunk_cap
+        if TRACE_TRAVERSAL:
+            trace_logger.traversal(
+                f"done visited={len(trace.visited_nodes)} chunks={len(trace.collected_chunk_ids)} "
+                f"filtered_low_quality={self._filtered_low_quality} "
+                f"filtered_blocked_pred={self._filtered_blocked_pred} "
+                f"filtered_community={self._filtered_community} "
+                f"filtered_out_of_scope={self._filtered_out_of_scope_edges} "
+                f"stopped_by_chunk_cap={self._stopped_by_chunk_cap}"
+            )
         
         return trace
 
@@ -261,6 +285,10 @@ class GraphTraverser:
                 # Proportional to overlap
                 relevance = len(overlap) / max(len(self._query_tokens), 1)
                 score += self.query_relevance_weight * relevance
+        if TRACE_VERBOSE and TRACE_TRAVERSAL and self._trace_step_count < TRACE_MAX_STEPS:
+            trace_logger.score(
+                f"score_node node={node_id} depth={depth} score={score:.3f} predicate={predicate}"
+            )
 
         # Community affinity bonus
         community_id = self.node_to_community.get(node_id)
@@ -302,11 +330,15 @@ class GraphTraverser:
             # Scoped entity filter: skip neighbors not in scoped entity set
             if self._scoped_entity_ids is not None and neighbor_id not in self._scoped_entity_ids:
                 self._filtered_out_of_scope_edges += 1
+                if TRACE_VERBOSE and TRACE_TRAVERSAL and self._trace_step_count < TRACE_MAX_STEPS:
+                    trace_logger.traversal(f"skip_out_of_scope neighbor={neighbor_id}")
                 continue
             
             # Filter check: skip stop entities during expansion
             if self.filters and not self.filters.is_valid_expansion(neighbor_id):
                 self._filtered_low_quality += 1
+                if TRACE_VERBOSE and TRACE_TRAVERSAL and self._trace_step_count < TRACE_MAX_STEPS:
+                    trace_logger.traversal(f"skip_low_quality neighbor={neighbor_id}")
                 continue
 
             neighbor_community = self.node_to_community.get(neighbor_id)
@@ -314,6 +346,8 @@ class GraphTraverser:
             # In strict mode, only expand to nodes within target communities
             if restrict_to_communities and target_communities and neighbor_community not in target_communities:
                 self._filtered_community += 1
+                if TRACE_VERBOSE and TRACE_TRAVERSAL and self._trace_step_count < TRACE_MAX_STEPS:
+                    trace_logger.traversal(f"skip_community neighbor={neighbor_id} community={neighbor_community}")
                 continue
 
             # Get best IN-SCOPE edge to this neighbor (by weight, with predicate quality)
@@ -358,6 +392,8 @@ class GraphTraverser:
             # Skip if score is negative (blocked predicate)
             if score < 0:
                 self._filtered_blocked_pred += 1
+                if TRACE_VERBOSE and TRACE_TRAVERSAL and self._trace_step_count < TRACE_MAX_STEPS:
+                    trace_logger.traversal(f"skip_blocked_pred neighbor={neighbor_id} pred={edge_label}")
                 continue
 
             heapq.heappush(

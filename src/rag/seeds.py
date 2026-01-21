@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from ..config.logging import trace_logger, TRACE_VERBOSE, TRACE_MAX_ITEMS
 
 if TYPE_CHECKING:
     import networkx as nx
@@ -101,6 +102,7 @@ def score_entities_for_query(
         List of ScoredEntity, sorted by score descending
     """
     query_tokens = tokenize_query(query)
+    trace_logger.decision(f"seed_score tokens={sorted(query_tokens)[:TRACE_MAX_ITEMS]}")
     target_set = set(target_communities)
     
     scored: list[ScoredEntity] = []
@@ -141,6 +143,10 @@ def score_entities_for_query(
     
     # Sort by score descending
     scored.sort(key=lambda x: x.score, reverse=True)
+    if TRACE_VERBOSE:
+        trace_logger.score(
+            f"seed_score_top={[(s.label, round(s.score, 3), s.reason) for s in scored[:TRACE_MAX_ITEMS]]}"
+        )
     
     return scored[:max_results]
 
@@ -162,6 +168,9 @@ def select_seeds(
     """
     # Get candidate entities from chunks
     candidates = storage.get_entity_ids_from_chunks(chunk_ids)
+    trace_logger.decision(
+        f"seed_candidates chunks={len(chunk_ids)} candidates={len(candidates)}"
+    )
     
     # Score and filter
     scored = score_entities_for_query(

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from ..config.logging import trace_logger, TRACE_VERBOSE, TRACE_MAX_ITEMS
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -44,9 +45,20 @@ class VectorSearch:
     def get_embedding(self, text: str) -> list[float]:
         """Get embedding vector for text."""
         text = text.replace("\n", " ")
+        trace_logger.tool_call(
+            "openai.embeddings.create",
+            model=self.embedding_model,
+            text_len=len(text),
+        )
+        if TRACE_VERBOSE:
+            trace_logger.debug(f"[TOOL] input_text={text[:500]}")
         response = self.llm_client.embeddings.create(
             input=[text],
             model=self.embedding_model,
+        )
+        trace_logger.tool_result(
+            "openai.embeddings.create",
+            embedding_dim=len(response.data[0].embedding),
         )
         return response.data[0].embedding
 
@@ -72,18 +84,38 @@ class VectorSearch:
         query_embedding = self.get_embedding(query)
 
         # Search chunks (scoped if text_ids provided)
+        trace_logger.tool_call(
+            "storage.vector_search_chunks",
+            limit=chunk_limit,
+            scoped=bool(text_ids),
+            text_ids_count=len(text_ids) if text_ids else 0,
+        )
         chunk_results = self.storage.vector_search_chunks(
             query_embedding, limit=chunk_limit, text_ids=text_ids
         )
         chunk_ids = [r[0] for r in chunk_results]
         chunk_scores = [r[1] for r in chunk_results]
+        trace_logger.tool_result(
+            "storage.vector_search_chunks",
+            count=len(chunk_ids),
+            top=chunk_results[:TRACE_MAX_ITEMS],
+        )
 
         # Search communities (unscoped - communities aggregate across texts)
+        trace_logger.tool_call(
+            "storage.vector_search_communities",
+            limit=community_limit,
+        )
         community_results = self.storage.vector_search_communities(
             query_embedding, limit=community_limit
         )
         community_ids = [r[0] for r in community_results]
         community_scores = [r[1] for r in community_results]
+        trace_logger.tool_result(
+            "storage.vector_search_communities",
+            count=len(community_ids),
+            top=community_results[:TRACE_MAX_ITEMS],
+        )
 
         return VectorSearchResult(
             chunk_ids=chunk_ids,
@@ -111,11 +143,22 @@ class VectorSearch:
             (chunk_ids, scores, query_embedding)
         """
         query_embedding = self.get_embedding(query)
+        trace_logger.tool_call(
+            "storage.vector_search_chunks",
+            limit=limit,
+            scoped=bool(text_ids),
+            text_ids_count=len(text_ids) if text_ids else 0,
+        )
         results = self.storage.vector_search_chunks(
             query_embedding, limit=limit, text_ids=text_ids
         )
         chunk_ids = [r[0] for r in results]
         scores = [r[1] for r in results]
+        trace_logger.tool_result(
+            "storage.vector_search_chunks",
+            count=len(chunk_ids),
+            top=results[:TRACE_MAX_ITEMS],
+        )
         return chunk_ids, scores, query_embedding
 
     def search_community_reports(
@@ -137,6 +180,12 @@ class VectorSearch:
             When text_ids provided, cited_chunk_ids are pre-filtered at SQL level.
         """
         query_embedding = self.get_embedding(query)
+        trace_logger.tool_call(
+            "storage.vector_search_community_reports",
+            limit=limit,
+            scoped=bool(text_ids),
+            text_ids_count=len(text_ids) if text_ids else 0,
+        )
         results = self.storage.vector_search_community_reports(
             query_embedding, limit=limit, text_ids=text_ids
         )
@@ -151,6 +200,12 @@ class VectorSearch:
             community_scores.append(score)
             if cited_chunks:
                 all_cited_chunks.extend(cited_chunks)
+        trace_logger.tool_result(
+            "storage.vector_search_community_reports",
+            count=len(community_ids),
+            top=results[:TRACE_MAX_ITEMS],
+            cited_chunks=len(set(all_cited_chunks)),
+        )
         
         return CommunityReportSearchResult(
             community_ids=community_ids,

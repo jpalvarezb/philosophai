@@ -11,6 +11,13 @@ from pathlib import Path
 # Log levels
 LOG_LEVEL = os.environ.get("PHILOSOPH_LOG_LEVEL", "INFO").upper()
 SCOPE_LOG_LEVEL = os.environ.get("PHILOSOPH_SCOPE_LOG_LEVEL", "DEBUG").upper()
+TRACE_LOG_LEVEL = os.environ.get("PHILOSOPH_TRACE_LOG_LEVEL", "INFO").upper()
+
+# Trace verbosity toggles
+TRACE_VERBOSE = os.environ.get("PHILOSOPH_TRACE_VERBOSE", "0").lower() in {"1", "true", "yes"}
+TRACE_TRAVERSAL = os.environ.get("PHILOSOPH_TRACE_TRAVERSAL", "0").lower() in {"1", "true", "yes"}
+TRACE_MAX_ITEMS = int(os.environ.get("PHILOSOPH_TRACE_MAX_ITEMS", "10"))
+TRACE_MAX_STEPS = int(os.environ.get("PHILOSOPH_TRACE_MAX_STEPS", "200"))
 
 # Log directory
 LOG_DIR = Path(os.environ.get("PHILOSOPH_LOG_DIR", "logs"))
@@ -34,6 +41,12 @@ class ScopeFormatter(logging.Formatter):
         "PASS": "✅",
         "FAIL": "❌",
         "VIOLATION": "🚨",
+        "AGENT": "🤖",
+        "TOOL": "🧰",
+        "RESULT": "📊",
+        "DECISION": "🧭",
+        "TRAVERSAL": "🧵",
+        "SCORE": "🎯",
     }
     
     def __init__(self, use_color: bool = True):
@@ -180,6 +193,64 @@ class ScopeLogger:
         self.logger.error(msg, *args)
 
 
+class TraceLogger:
+    """
+    Logger for detailed agent/tool/traversal decisions.
+    Controlled via PHILOSOPH_TRACE_* env vars.
+    """
+    def __init__(self, name: str = "philosoph.trace"):
+        self.logger = logging.getLogger(name)
+        self._setup_done = False
+
+    def setup(self, level: str = TRACE_LOG_LEVEL, log_to_file: bool = True):
+        if self._setup_done:
+            return
+        self.logger.setLevel(getattr(logging, level))
+        self.logger.propagate = False
+
+        console = logging.StreamHandler(sys.stderr)
+        console.setFormatter(ScopeFormatter(use_color=True))
+        self.logger.addHandler(console)
+
+        if log_to_file:
+            LOG_DIR.mkdir(exist_ok=True)
+            file_handler = logging.FileHandler(
+                LOG_DIR / "trace.log",
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(ScopeFormatter(use_color=False))
+            self.logger.addHandler(file_handler)
+
+        self._setup_done = True
+
+    def decision(self, msg: str):
+        self.logger.info(f"[DECISION] {msg}")
+
+    def tool_call(self, name: str, **kwargs):
+        details = " ".join(f"{k}={v}" for k, v in kwargs.items())
+        self.logger.info(f"[TOOL] CALL {name} {details}".strip())
+
+    def tool_result(self, name: str, **kwargs):
+        details = " ".join(f"{k}={v}" for k, v in kwargs.items())
+        self.logger.info(f"[RESULT] {name} {details}".strip())
+
+    def traversal(self, msg: str):
+        self.logger.info(f"[TRAVERSAL] {msg}")
+
+    def score(self, msg: str):
+        self.logger.debug(f"[SCORE] {msg}")
+
+    def debug(self, msg: str):
+        self.logger.debug(msg)
+
+    def info(self, msg: str):
+        self.logger.info(msg)
+
+
+# Singleton instances
+trace_logger = TraceLogger()
+
+
 # Singleton instance
 scope_logger = ScopeLogger()
 
@@ -203,8 +274,9 @@ def setup_logging(level: str = LOG_LEVEL):
         ))
         root.addHandler(console)
     
-    # Setup scope logger
+    # Setup scope & trace loggers
     scope_logger.setup()
+    trace_logger.setup()
     
     # Quiet noisy libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)

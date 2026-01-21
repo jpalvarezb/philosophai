@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable
-from ..config import scope_logger
+from ..config import scope_logger, trace_logger
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -81,6 +81,10 @@ class MultiHopAgent:
         from .scope import ScopeFilter, Scope, ScopeViolationError
 
         trace = TraceRecorder(query=question)
+        trace_logger.decision(
+            f"query_start | max_hops={max_hops} max_context_chunks={max_context_chunks} "
+            f"use_community_routing={use_community_routing} scope={'yes' if scope else 'no'}"
+        )
         
         # Step 0: Apply scope if provided by agent
         scope_filter = ScopeFilter(self.storage, scope) if scope and not scope.is_empty() else None
@@ -139,6 +143,8 @@ class MultiHopAgent:
                     observation=f"Restricting to {scoped_chunk_count:,} chunks from {len(scoped_text_ids)} texts",
                 )
             self._emit("status", {"message": f"Scoped to {scope.describe()}..."})
+        else:
+            trace_logger.decision("scope=None (global)")
 
         # Step 1: Community routing
         # For STRICT scope: derive communities from scoped chunks (not global reports)
@@ -174,6 +180,10 @@ class MultiHopAgent:
             )
             trace.selected_community_ids = target_communities
             trace.community_report_scores = community_scores
+            trace_logger.decision(
+                f"routing(strict) derived_communities={target_communities} "
+                f"counts={[c for _, c in derived_communities][:5]}"
+            )
             
         elif use_community_routing:
             # NON-STRICT or NO SCOPE: Use global community report search
@@ -200,8 +210,12 @@ class MultiHopAgent:
                 )
                 trace.selected_community_ids = target_communities
                 trace.community_report_scores = community_scores
+                trace_logger.decision(
+                    f"routing(global) communities={target_communities} scores={report_result.scores[:5]}"
+                )
             except Exception as e:
                 trace.add_thought(f"Community routing failed, falling back to vector search: {e}")
+                trace_logger.decision(f"routing_failed fallback=vector_search error={e}")
         
         # Step 2: Vector search (scoped at SQL level)
         self._emit("status", {"message": "Searching knowledge base..."})
@@ -209,6 +223,9 @@ class MultiHopAgent:
         # Pass text_ids for retrieval-time scope filtering
         vector_result = self.vector_search.search(
             question, chunk_limit=15, community_limit=5, text_ids=scoped_text_ids
+        )
+        trace_logger.decision(
+            f"vector_result chunks={len(vector_result.chunk_ids)} communities={len(vector_result.community_ids)}"
         )
         
         # Track vector - with retrieval-time filtering, out_of_scope should be 0
@@ -268,6 +285,9 @@ class MultiHopAgent:
         
         seed_nodes = [s.entity_id for s in scored_seeds]
         seed_labels = [f"{s.label}({s.score:.2f})" for s in scored_seeds[:5]]
+        trace_logger.decision(
+            f"seeds_selected count={len(seed_nodes)} top={seed_labels}"
+        )
         
         # HARD CHECK 2: Seeds must be in V(scoped_edges)
         if is_strict_scope:
@@ -324,6 +344,11 @@ class MultiHopAgent:
             scoped_edges=scoped_edges if is_strict_scope else None,  # STRICT: constrain edge traversal
         )
         traversal_trace.seed_chunks = all_chunk_ids[:20]
+        trace_logger.decision(
+            f"traversal_done visited={len(traversal_trace.visited_nodes)} "
+            f"chunks={len(traversal_trace.collected_chunk_ids)} "
+            f"edges_filtered={traversal_trace.filtered_out_of_scope_edges}"
+        )
         
         # HARD CHECK 3: Traversal must only collect scoped chunks
         if is_strict_scope:
@@ -390,6 +415,9 @@ class MultiHopAgent:
             trace=traversal_trace,
             max_context=max_context_chunks,
         )
+        trace_logger.decision(
+            f"context_selected total_collected={len(all_collected_ids)} selected={len(context_chunks)}"
+        )
 
         trace.total_chunks_retrieved = len(all_collected_ids)
         trace.add_thought(
@@ -421,6 +449,7 @@ class MultiHopAgent:
         import re
         citation_refs = re.findall(r'\[(\d+)\]', answer)
         citations_used = list(set(int(c) for c in citation_refs if int(c) <= len(citations)))
+        trace_logger.decision(f"answer_generated length={len(answer)} citations_used={len(citations_used)}")
 
         trace.set_answer(answer, citations_used)
 
@@ -437,6 +466,7 @@ class MultiHopAgent:
 
     def _generate_answer(self, question: str, context: str) -> str:
         """Generate answer using LLM with context."""
+        from ..config.logging import TRACE_VERBOSE
         system_prompt = """You are a knowledgeable assistant answering questions based on provided context.
 
 INSTRUCTIONS:
@@ -452,6 +482,15 @@ Context:
 
 Answer the question using the context above. Cite sources with [n] notation."""
 
+        trace_logger.tool_call(
+            "openai.chat.completions.create",
+            model=self.llm_model,
+            system_len=len(system_prompt),
+            user_len=len(user_prompt),
+        )
+        if TRACE_VERBOSE:
+            trace_logger.debug(f"[TOOL] system_prompt={system_prompt[:500]}")
+            trace_logger.debug(f"[TOOL] user_prompt={user_prompt[:500]}")
         response = self.llm_client.chat.completions.create(
             model=self.llm_model,
             messages=[
@@ -460,7 +499,14 @@ Answer the question using the context above. Cite sources with [n] notation."""
             ],
             temperature=0,
         )
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        trace_logger.tool_result(
+            "openai.chat.completions.create",
+            response_len=len(content),
+        )
+        if TRACE_VERBOSE:
+            trace_logger.debug(f"[RESULT] answer_snippet={content[:500]}")
+        return content
 
     def query_simple(self, question: str, limit: int = 10) -> dict:
         """

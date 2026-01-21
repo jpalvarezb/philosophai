@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+from ..config.logging import trace_logger, TRACE_VERBOSE, TRACE_MAX_ITEMS
 
 if TYPE_CHECKING:
     from ..storage import DuckDBStorage
@@ -88,6 +89,10 @@ class ResultFusion:
         # Sort by score
         sorted_chunks = sorted(chunk_scores.items(), key=lambda x: x[1], reverse=True)
         top_chunk_ids = [c[0] for c in sorted_chunks[:max_chunks]]
+        trace_logger.decision(
+            f"fusion_result total={len(chunk_scores)} selected={len(top_chunk_ids)} "
+            f"top={top_chunk_ids[:TRACE_MAX_ITEMS]}"
+        )
 
         return FusedResult(
             chunk_ids=top_chunk_ids,
@@ -242,8 +247,22 @@ class ResultFusion:
             vector_search_chunks=vector_chunks,
             max_context=max_context,
         )
+        trace_logger.decision(
+            f"context_select report={len(report_cited_chunks)} traversal={len(traversal_chunks)} "
+            f"vector={len(vector_chunks)} selected={len(context_ids)}"
+        )
+        if TRACE_VERBOSE:
+            trace_logger.debug(f"context_ids_top={context_ids[:TRACE_MAX_ITEMS]}")
         
         # Fetch content
+        trace_logger.tool_call(
+            "storage.get_chunk_texts",
+            count=len(context_ids),
+        )
         context_texts = self.storage.get_chunk_texts(context_ids)
+        trace_logger.tool_result(
+            "storage.get_chunk_texts",
+            count=len(context_texts),
+        )
         
         return context_texts, list(all_collected), context_scores
