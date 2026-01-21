@@ -56,7 +56,7 @@ def init_components():
     """Initialize all components (called at startup)."""
     from ..config import setup_logging
     setup_logging()
-    
+
     from openai import OpenAI
     from ..storage import DuckDBStorage
     from ..graph import GraphBuilder, GraphTraverser, GraphFilters
@@ -134,7 +134,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="PhilosophAI",
         description="Knowledge Graph RAG with Community Routing",
-        version="0.3.0",
+        version="0.3.1",
         lifespan=lifespan,
     )
 
@@ -160,7 +160,7 @@ def create_app() -> FastAPI:
     async def query(request: QueryRequest):
         """Execute a GraphRAG query."""
         from ..agents import Scope
-        
+
         if not state.ready or not state.agent:
             raise HTTPException(status_code=503, detail="Agent not initialized")
 
