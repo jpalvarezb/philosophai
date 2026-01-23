@@ -287,6 +287,39 @@
             color: #9ca3af;
         }
         
+        /* Citation Hover Tooltip */
+        #citation-tooltip {
+            position: absolute;
+            background: rgba(10, 10, 15, 0.95);
+            backdrop-filter: blur(12px);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid rgba(96, 165, 250, 0.4);
+            max-width: 350px;
+            max-height: 250px;
+            overflow-y: auto;
+            font-size: 12px;
+            line-height: 1.5;
+            color: #e5e7eb;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            z-index: 300;
+            display: none;
+            pointer-events: none;
+        }
+        
+        #citation-tooltip .tooltip-header {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #60a5fa;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        
+        #citation-tooltip .tooltip-content {
+            color: #d1d5db;
+        }
+        
         /* Loading */
         #loading {
             position: fixed;
@@ -371,6 +404,10 @@
             <div id="node-info-name"></div>
             <div id="node-info-details"></div>
         </div>
+        <div id="citation-tooltip">
+            <div class="tooltip-header">Source</div>
+            <div class="tooltip-content" id="tooltip-content"></div>
+        </div>
     </div>
 
     <script src="//cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
@@ -388,6 +425,7 @@
         let traversalNodes = new Set();  // Nodes from query traversal
         let traversalLinks = new Set();  // Links from query traversal
         let communityColors = {};
+        let citationData = [];  // Store citation info for hover
 
         // Generate colors for communities
         function getCommunityColor(commId) {
@@ -620,7 +658,7 @@
             }
         }
 
-        // Query function
+        // Query function - uses agentic endpoint
         async function runQuery() {
             const question = document.getElementById('query-input').value.trim();
             if (!question) return;
@@ -629,7 +667,7 @@
             btn.disabled = true;
             btn.innerText = 'Thinking...';
             
-            setStatus('pending', 'Processing query...');
+            setStatus('pending', 'Agent reasoning...');
             
             // Clear previous results
             document.getElementById('routing-info').style.display = 'none';
@@ -640,12 +678,14 @@
             traversalLinks.clear();
             highlightNodes.clear();
             highlightLinks.clear();
+            citationData = [];
             
             try {
-                const res = await fetch(`${API_BASE}/api/query`, {
+                // Use the agentic endpoint
+                const res = await fetch(`${API_BASE}/api/agent/query`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question, max_hops: 2, use_community_routing: true })
+                    body: JSON.stringify({ question, max_iterations: 25, verbose: false })
                 });
                 
                 if (!res.ok) {
@@ -654,58 +694,66 @@
                 }
                 
                 const data = await res.json();
-                console.log('Query response:', data);
+                console.log('Agent query response:', data);
                 
-                // Show routing info
-                const routing = data.trace?.routing || {};
-                if (routing.selected_communities?.length > 0) {
+                // Show scope info (replaces routing info for agent endpoint)
+                const scope = data.scope;
+                if (scope && (scope.authors?.length || scope.titles?.length || scope.traditions?.length)) {
                     document.getElementById('routing-info').style.display = 'block';
-                    document.getElementById('community-tags').innerHTML = 
-                        routing.selected_communities.map(c => 
-                            `<span class="community-tag">Community ${c}</span>`
-                        ).join('');
+                    const scopeParts = [];
+                    if (scope.authors?.length) scopeParts.push(...scope.authors.map(a => `<span class="community-tag">${a}</span>`));
+                    if (scope.titles?.length) scopeParts.push(...scope.titles.map(t => `<span class="community-tag">${t}</span>`));
+                    if (scope.traditions?.length) scopeParts.push(...scope.traditions.map(t => `<span class="community-tag">${t}</span>`));
+                    document.getElementById('community-tags').innerHTML = scopeParts.join('');
                 }
                 
-                // Show traversal stats and dynamically add nodes/edges from query
+                // Show traversal stats and dynamically add nodes/edges from agent
                 const traversal = data.traversal || {};
                 let graphNeedsUpdate = false;
-                
-                // Add nodes from traversal that aren't in main graph
-                if (traversal.nodes?.length > 0) {
-                    traversal.nodes.forEach(node => {
-                        if (!nodesById[node.id]) {
-                            // New node not in main DAG - add it
-                            const newNode = {
-                                id: node.id,
-                                label: node.label || node.id,
-                                community: node.community,
-                                val: 1,
-                                neighbors: [],
-                                links: [],
-                                _dynamic: true  // Mark as dynamically added
-                            };
-                            graphData.nodes.push(newNode);
-                            nodesById[node.id] = newNode;
-                            graphNeedsUpdate = true;
-                        }
-                    });
-                }
                 
                 // Add edges from traversal that aren't in main graph
                 if (traversal.edges?.length > 0) {
                     traversal.edges.forEach(edge => {
-                        const srcId = edge.source || edge.src;
-                        const tgtId = edge.target || edge.tgt;
+                        const srcId = edge.source;
+                        const tgtId = edge.target;
                         const linkKey = `${srcId}-${tgtId}`;
                         const linkKeyRev = `${tgtId}-${srcId}`;
+                        
+                        // Check if nodes exist, add them if not
+                        if (!nodesById[srcId]) {
+                            const newNode = {
+                                id: srcId,
+                                label: srcId,
+                                val: 1,
+                                neighbors: [],
+                                links: [],
+                                _dynamic: true
+                            };
+                            graphData.nodes.push(newNode);
+                            nodesById[srcId] = newNode;
+                            graphNeedsUpdate = true;
+                        }
+                        if (!nodesById[tgtId]) {
+                            const newNode = {
+                                id: tgtId,
+                                label: tgtId,
+                                val: 1,
+                                neighbors: [],
+                                links: [],
+                                _dynamic: true
+                            };
+                            graphData.nodes.push(newNode);
+                            nodesById[tgtId] = newNode;
+                            graphNeedsUpdate = true;
+                        }
                         
                         if (!linksById[linkKey] && !linksById[linkKeyRev]) {
                             // New edge not in main DAG - add it
                             const newLink = {
                                 source: srcId,
                                 target: tgtId,
-                                label: edge.label || edge.type || '',
-                                _dynamic: true  // Mark as dynamically added
+                                label: edge.label || '',
+                                _dynamic: true
                             };
                             graphData.links.push(newLink);
                             linksById[linkKey] = newLink;
@@ -727,17 +775,33 @@
                         
                         // Track as traversal link for highlighting
                         traversalLinks.add(linkKey);
+                        // Also track both nodes as traversal nodes
+                        traversalNodes.add(srcId);
+                        traversalNodes.add(tgtId);
                     });
                 }
                 
+                // Also add visited_nodes from traversal
                 if (traversal.visited_nodes?.length > 0) {
-                    document.getElementById('traversal-stats').style.display = 'block';
-                    document.getElementById('nodes-visited').innerText = traversal.visited_nodes.length;
-                    document.getElementById('edges-traversed').innerText = traversal.edges_traversed || traversal.edges?.length || '-';
-                    document.getElementById('hops-count').innerText = traversal.hops || '-';
-                    
-                    // Highlight traversed nodes in graph
                     traversal.visited_nodes.forEach(n => traversalNodes.add(n));
+                }
+                
+                // IMPORTANT: Also highlight collected_entities - these are nodes discovered from chunks
+                // They represent the "evidence trail" through the knowledge graph
+                if (data.collected_entities?.length > 0) {
+                    data.collected_entities.forEach(entityId => {
+                        // Only add if node exists in loaded graph
+                        if (nodesById[entityId]) {
+                            traversalNodes.add(entityId);
+                        }
+                    });
+                }
+                
+                if (traversalNodes.size > 0 || traversal.edges_traversed > 0 || data.collected_entities?.length > 0) {
+                    document.getElementById('traversal-stats').style.display = 'block';
+                    document.getElementById('nodes-visited').innerText = traversalNodes.size;
+                    document.getElementById('edges-traversed').innerText = traversal.edges_traversed || traversalLinks.size || '-';
+                    document.getElementById('hops-count').innerText = data.iterations || '-';
                 }
                 
                 // Update graph if new nodes/edges were added
@@ -749,18 +813,24 @@
                     updateGraph();
                 }
                 
-                // Show answer
-                document.getElementById('answer-box').style.display = 'block';
-                document.getElementById('answer-text').innerHTML = formatAnswer(data.answer || 'No answer generated.');
+                // Store citation data for hover functionality
+                citationData = data.citations || [];
                 
-                // Show citations
+                // Show answer with interactive citations
+                document.getElementById('answer-box').style.display = 'block';
+                document.getElementById('answer-text').innerHTML = formatAnswerWithCitations(data.answer || 'No answer generated.', citationData);
+                
+                // Setup citation hover handlers
+                setupCitationHover();
+                
+                // Show citations list
                 if (data.citations?.length > 0) {
                     document.getElementById('citations-section').style.display = 'block';
                     document.getElementById('citations-list').innerHTML = 
                         data.citations.slice(0, 10).map(c => `
-                            <div class="citation">
+                            <div class="citation" data-citation-index="${c.index}">
                                 <span class="citation-num">${c.index}</span>
-                                ${escapeHtml(c.preview || c.text || '')}
+                                ${escapeHtml(c.preview || c.full_content?.substring(0, 200) || '')}
                                 ${c.community_id != null ? `<span class="citation-community">Community ${c.community_id}</span>` : ''}
                             </div>
                         `).join('');
@@ -782,6 +852,72 @@
         function formatAnswer(text) {
             // Convert [n] citations to superscript
             return escapeHtml(text).replace(/\[(\d+)\]/g, '<sup>[$1]</sup>');
+        }
+        
+        function formatAnswerWithCitations(text, citations) {
+            // Convert [n] citations to interactive superscript spans
+            return escapeHtml(text).replace(/\[(\d+)\]/g, (match, num) => {
+                const citation = citations.find(c => c.index === parseInt(num));
+                if (citation) {
+                    return `<sup class="citation-ref" data-citation-index="${num}">[${num}]</sup>`;
+                }
+                return `<sup>[${num}]</sup>`;
+            });
+        }
+        
+        function setupCitationHover() {
+            const tooltip = document.getElementById('citation-tooltip');
+            const tooltipContent = document.getElementById('tooltip-content');
+            const answerText = document.getElementById('answer-text');
+            
+            answerText.querySelectorAll('.citation-ref').forEach(ref => {
+                ref.addEventListener('mouseenter', (e) => {
+                    const index = parseInt(ref.dataset.citationIndex);
+                    const citation = citationData.find(c => c.index === index);
+                    
+                    if (citation) {
+                        // Update tooltip content
+                        tooltipContent.innerHTML = escapeHtml(citation.full_content || citation.preview || '');
+                        
+                        // Position tooltip near the citation ref
+                        const rect = ref.getBoundingClientRect();
+                        const graphContainer = document.getElementById('graph-container');
+                        const containerRect = graphContainer.getBoundingClientRect();
+                        
+                        // Check if any node_ids match nodes in graph and try to position over them
+                        if (citation.node_ids?.length > 0) {
+                            const nodeId = citation.node_ids[0];
+                            const node = nodesById[nodeId];
+                            if (node && Graph) {
+                                // Get screen coordinates of the node
+                                const screenCoords = Graph.graph2ScreenCoords(node.x, node.y, node.z);
+                                if (screenCoords) {
+                                    tooltip.style.left = `${containerRect.left + screenCoords.x - 175}px`;
+                                    tooltip.style.top = `${containerRect.top + screenCoords.y - 130}px`;
+                                    tooltip.style.display = 'block';
+                                    
+                                    // Highlight the node
+                                    highlightNodes.clear();
+                                    highlightNodes.add(nodeId);
+                                    updateGraph();
+                                    return;
+                                }
+                            }
+                        }
+                        
+                        // Fallback: position near the citation in the text
+                        tooltip.style.left = `${rect.right + 10}px`;
+                        tooltip.style.top = `${rect.top - 50}px`;
+                        tooltip.style.display = 'block';
+                    }
+                });
+                
+                ref.addEventListener('mouseleave', () => {
+                    tooltip.style.display = 'none';
+                    highlightNodes.clear();
+                    updateGraph();
+                });
+            });
         }
         
         function escapeHtml(text) {

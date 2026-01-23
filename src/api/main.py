@@ -38,6 +38,25 @@ class QueryResponse(BaseModel):
     trace: dict
 
 
+# --- Pydantic Models for Agentic Query ---
+class AgentQueryRequest(BaseModel):
+    question: str
+    max_iterations: int = 25
+    verbose: bool = False
+
+
+class AgentQueryResponse(BaseModel):
+    answer: str
+    citations: list[dict]
+    phase: str
+    scope: dict | None
+    collected_chunks: list[str]
+    collected_entities: list[str]
+    traversal: dict
+    thoughts: list[dict]
+    iterations: int
+
+
 # --- Application State ---
 class AppState:
     """Holds initialized components."""
@@ -45,6 +64,9 @@ class AppState:
         self.storage = None
         self.graph_builder = None
         self.agent = None
+        self.philosopher_agent = None  # Agentic query handler
+        self.agent_tools = None
+        self.citation_builder = None
         self.node_to_community = {}
         self.ready = False
 
@@ -61,7 +83,7 @@ def init_components():
     from ..storage import DuckDBStorage
     from ..graph import GraphBuilder, GraphTraverser, GraphFilters
     from ..rag import VectorSearch, ResultFusion, CitationBuilder
-    from ..agents import MultiHopAgent
+    from ..agents import MultiHopAgent, AgentTools, PhilosopherAgent
 
     # Config from environment
     db_path = os.environ.get("PHILOSOPH_DB", "data/philosoph.duckdb")
@@ -95,7 +117,7 @@ def init_components():
     client = OpenAI(api_key=openai_key)
     vector_search = VectorSearch(state.storage, client)
     fusion = ResultFusion(state.storage)
-    citation_builder = CitationBuilder(state.storage, state.node_to_community)
+    state.citation_builder = CitationBuilder(state.storage, state.node_to_community)
 
     # Initialize filters for traversal and seeding (uses precomputed conceptness scores)
     filters = GraphFilters(G, storage=state.storage, hub_threshold_pct=0.01, min_degree=1)
@@ -106,11 +128,29 @@ def init_components():
         graph_builder=state.graph_builder,
         vector_search=vector_search,
         fusion=fusion,
-        citation_builder=citation_builder,
+        citation_builder=state.citation_builder,
         traverser=traverser,
         llm_client=client,
         node_to_community=state.node_to_community,
         filters=filters,
+    )
+
+    # Initialize AgentTools for the agentic query handler
+    state.agent_tools = AgentTools(
+        storage=state.storage,
+        graph_builder=state.graph_builder,
+        vector_search=vector_search,
+        node_to_community=state.node_to_community,
+    )
+
+    # Initialize PhilosopherAgent (OpenAI function calling-based agentic handler)
+    print("🤖 Initializing PhilosopherAgent...")
+    state.philosopher_agent = PhilosopherAgent(
+        agent_tools=state.agent_tools,
+        citation_builder=state.citation_builder,
+        llm_client=client,
+        llm_model="gpt-4o",
+        verbose=False,
     )
 
     # Share agent with WebSocket module
@@ -183,6 +223,34 @@ def create_app() -> FastAPI:
             scope=scope,
         )
         return result
+
+    # Agentic query endpoint (CrewAI-based with sequential thinking)
+    @app.post("/api/agent/query", response_model=AgentQueryResponse)
+    async def agent_query(request: AgentQueryRequest):
+        """
+        Execute an agentic query with sequential thinking.
+        
+        This endpoint uses CrewAI to orchestrate tool calling with
+        explicit reasoning steps. The agent:
+        1. Determines appropriate scope by calling list_available_sources
+        2. Sets scope if needed, or skips for broad queries
+        3. Searches for relevant evidence
+        4. Explores the knowledge graph
+        5. Synthesizes an answer with citations
+        
+        All reasoning is documented via the sequential_thinking tool.
+        """
+        if not state.ready or not state.philosopher_agent:
+            raise HTTPException(status_code=503, detail="Agent not initialized")
+
+        try:
+            result = state.philosopher_agent.query(
+                question=request.question,
+                max_iterations=request.max_iterations,
+            )
+            return result
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     # Graph data for visualization
     @app.get("/api/graph")

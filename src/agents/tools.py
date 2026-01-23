@@ -35,17 +35,57 @@ class AgentTools:
         self.graph_builder = graph_builder
         self.vector_search = vector_search
         self.node_to_community = node_to_community
+        self._current_scope: "Scope | None" = None
+        self._scoped_text_ids: list[int] = []
+        self._scoped_chunks: set[str] | None = None
+        self._scoped_edges: set[tuple[str, str, str]] | None = None
+        self._induced_nodes: set[str] | None = None  # V(scoped_edges) for induced subgraph
+    
+    def set_active_scope(self, scope: "Scope | None") -> None:
+        """Set the active scope for filtering searches and graph traversal."""
+        from .scope import ScopeFilter
+        self._current_scope = scope
+        if scope and not scope.is_empty():
+            scope_filter = ScopeFilter(self.storage, scope)
+            self._scoped_text_ids = list(scope_filter.get_text_ids())
+            self._scoped_chunks = scope_filter.get_scoped_chunk_ids()
+            self._scoped_edges = scope_filter.get_scoped_edges()
+            # Compute induced node set: V(scoped_edges)
+            self._induced_nodes = set()
+            for (subj, obj, _) in self._scoped_edges:
+                self._induced_nodes.add(subj)
+                self._induced_nodes.add(obj)
+        else:
+            self._scoped_text_ids = []
+            self._scoped_chunks = None
+            self._scoped_edges = None
+            self._induced_nodes = None
+    
+    def clear_active_scope(self) -> None:
+        """Clear the active scope."""
+        self._current_scope = None
+        self._scoped_text_ids = []
+        self._scoped_chunks = None
+        self._scoped_edges = None
+        self._induced_nodes = None
 
     def search_vectors(self, query: str, limit: int = 10) -> ToolResult:
-        """Search for relevant chunks via vector similarity."""
+        """Search for relevant chunks via vector similarity, respecting active scope."""
         try:
-            chunk_ids, scores, _ = self.vector_search.search_chunks_only(query, limit=limit)
+            # Use scoped search if scope is active
+            if self._scoped_text_ids:
+                chunk_ids, scores, _ = self.vector_search.search_chunks_only(
+                    query, limit=limit, text_ids=self._scoped_text_ids
+                )
+            else:
+                chunk_ids, scores, _ = self.vector_search.search_chunks_only(query, limit=limit)
             return ToolResult(
                 tool_name="search_vectors",
                 success=True,
                 data={
                     "chunk_ids": chunk_ids,
                     "scores": scores,
+                    "scoped": bool(self._scoped_text_ids),
                 },
             )
         except Exception as e:
@@ -55,6 +95,38 @@ class AgentTools:
                 data=None,
                 message=str(e),
             )
+
+    def search_community_reports(self, query: str, limit: int = 5) -> ToolResult:
+        """
+        Search community report summaries to identify relevant topic clusters.
+
+        Use for UNSCOPED/global questions to route into the right communities before
+        chunk-level search. When scope is active, cited chunks are pre-filtered by scope.
+        """
+        try:
+            result = self.vector_search.search_community_reports(
+                query,
+                limit=limit,
+                text_ids=self._scoped_text_ids if self._scoped_text_ids else None,
+            )
+            return ToolResult(
+                tool_name="search_community_reports",
+                success=True,
+                data={
+                    "community_ids": result.community_ids,
+                    "scores": result.scores,
+                    "cited_chunk_ids": result.cited_chunk_ids,
+                    "scoped": bool(self._scoped_text_ids),
+                },
+            )
+        except Exception as e:
+            return ToolResult(
+                tool_name="search_community_reports",
+                success=False,
+                data=None,
+                message=str(e),
+            )
+
 
     def read_community_summary(self, community_id: int) -> ToolResult:
         """Read the summary of a community."""
@@ -88,7 +160,13 @@ class AgentTools:
             )
 
     def expand_node(self, node_id: str, max_neighbors: int = 10) -> ToolResult:
-        """Get neighbors of a node with edge information."""
+        """
+        Get neighbors of a node with edge information.
+        
+        If scope is active, edges are marked as "in_scope" if they have
+        supporting chunks within the scope. Out-of-scope edges are shown
+        but marked clearly, allowing the agent to decide whether to follow them.
+        """
         try:
             if self.graph is None or node_id not in self.graph:
                 return ToolResult(
@@ -98,21 +176,84 @@ class AgentTools:
                     message=f"Node {node_id} not found in graph",
                 )
 
-            neighbors = self.graph_builder.get_neighbors(node_id)[:max_neighbors]
+            neighbors = self.graph_builder.get_neighbors(node_id)
             node_label = self.graph_builder.get_node_label(node_id)
             node_community = self.node_to_community.get(node_id)
 
             neighbor_data = []
-            for neighbor_id, predicate, attrs in neighbors:
+            in_scope_count = 0
+            out_scope_count = 0
+            
+            for neighbor_id, predicate_canon_id, attrs in neighbors:
+                edge_label = attrs.get("label", predicate_canon_id)  # Human-readable
+                edge_chunks = attrs.get("chunks", [])
+                
+                # Check if edge is in scope
+                # scoped_edges contains (subject_canon_id, object_canon_id, predicate_canon_id)
+                # Use predicate_canon_id (the key from MultiDiGraph), NOT the label
+                in_scope = True  # Default to in-scope if no scope set
+                if self._scoped_edges is not None:
+                    # Edge is in scope if (subj, obj, pred) or (obj, subj, pred) in scoped_edges
+                    in_scope = (
+                        (node_id, neighbor_id, predicate_canon_id) in self._scoped_edges or
+                        (neighbor_id, node_id, predicate_canon_id) in self._scoped_edges
+                    )
+                
+                if in_scope:
+                    in_scope_count += 1
+                else:
+                    out_scope_count += 1
+                
+                # Also check how many chunks are in scope
+                scoped_chunk_count = len(edge_chunks)
+                if self._scoped_chunks is not None:
+                    scoped_chunk_count = len(set(edge_chunks) & self._scoped_chunks)
+                
+                # Compute traversal score (like GraphTraverser._score_node)
+                edge_weight = attrs.get("weight", 1)
+                neighbor_label = self.graph_builder.get_node_label(neighbor_id)
+                
+                # Simplified scoring similar to traversal
+                traversal_score = 0.0
+                score_breakdown = []
+                
+                # Edge weight contribution (normalized)
+                weight_score = min(edge_weight / 10.0, 1.0) * 0.2
+                traversal_score += weight_score
+                score_breakdown.append(f"edge_wt={weight_score:.2f}")
+                
+                # Chunk evidence (more chunks = more confidence)
+                chunk_score = min(scoped_chunk_count / 5.0, 1.0) * 0.3 if scoped_chunk_count > 0 else 0
+                traversal_score += chunk_score
+                score_breakdown.append(f"evidence={chunk_score:.2f}")
+                
+                # Scope bonus
+                if in_scope:
+                    traversal_score += 0.3
+                    score_breakdown.append("in_scope=+0.30")
+                
                 neighbor_data.append({
                     "node_id": neighbor_id,
-                    "label": self.graph_builder.get_node_label(neighbor_id),
-                    "predicate": attrs.get("label", predicate),
-                    "weight": attrs.get("weight", 1),
+                    "label": neighbor_label,
+                    "predicate": edge_label,
+                    "weight": edge_weight,
                     "community_id": self.node_to_community.get(neighbor_id),
-                    "chunk_count": len(attrs.get("chunks", [])),
+                    "chunk_count": len(edge_chunks),
+                    "in_scope": in_scope,
+                    "scoped_chunk_count": scoped_chunk_count,
+                    "traversal_score": round(traversal_score, 3),
+                    "score_breakdown": "|".join(score_breakdown),
                 })
+            
+            # Sort: in-scope edges first, then by weight
+            neighbor_data.sort(key=lambda x: (-x["in_scope"], -x["weight"]))
+            neighbor_data = neighbor_data[:max_neighbors]
 
+            # Check if this node itself is in the induced subgraph
+            node_in_scope = True  # Default if no scope
+            if self._induced_nodes is not None:
+                node_in_scope = node_id in self._induced_nodes
+            
             return ToolResult(
                 tool_name="expand_node",
                 success=True,
@@ -120,7 +261,12 @@ class AgentTools:
                     "node_id": node_id,
                     "label": node_label,
                     "community_id": node_community,
+                    "node_in_scope": node_in_scope,  # Is this node in the induced subgraph?
                     "neighbors": neighbor_data,
+                    "total_neighbors": len(neighbors),
+                    "in_scope_neighbors": in_scope_count,
+                    "out_scope_neighbors": out_scope_count,
+                    "scope_active": self._scoped_edges is not None,
                 },
             )
         except Exception as e:
@@ -150,16 +296,111 @@ class AgentTools:
                 message=str(e),
             )
 
-    def get_entities_from_chunks(self, chunk_ids: list[str]) -> ToolResult:
-        """Find entity IDs mentioned in given chunks."""
+    def get_entities_from_chunks(self, chunk_ids: list[str], query: str = "") -> ToolResult:
+        """
+        Find entity IDs mentioned in given chunks, with optional scoring.
+        
+        If query is provided, entities are scored by:
+        - Query relevance (label token overlap)
+        - In-scope degree (how many in-scope edges - entities with 0 are filtered)
+        - Conceptness score (penalizes multiword phrase artifacts)
+        """
         try:
             entity_ids = self.storage.get_entity_ids_from_chunks(chunk_ids)
+            
+            # If no query, just return raw IDs
+            if not query:
+                return ToolResult(
+                    tool_name="get_entities_from_chunks",
+                    success=True,
+                    data={
+                        "entity_ids": entity_ids,
+                        "count": len(entity_ids),
+                    },
+                )
+            
+            # Score entities by query relevance
+            from ..rag.seeds import tokenize_query, score_label_relevance
+            
+            query_tokens = tokenize_query(query)
+            scored_entities = []
+            
+            # Use pre-computed induced node set from scope
+            induced_nodes = self._induced_nodes
+            
+            for entity_id in entity_ids:
+                if entity_id not in self.graph:
+                    continue
+                
+                label = self.graph.nodes[entity_id].get("label", entity_id)
+                relevance, reason = score_label_relevance(label, query_tokens)
+                
+                # Compute in-scope degree
+                in_scope_degree = 0
+                if induced_nodes is not None:
+                    # Only count if this entity is in the induced subgraph
+                    if entity_id in induced_nodes:
+                        # Count in-scope edges for this node
+                        for neighbor in self.graph[entity_id]:
+                            for pred_key in self.graph[entity_id][neighbor]:
+                                if ((entity_id, neighbor, pred_key) in self._scoped_edges or
+                                    (neighbor, entity_id, pred_key) in self._scoped_edges):
+                                    in_scope_degree += 1
+                else:
+                    # No scope - use total degree
+                    in_scope_degree = self.graph.degree(entity_id)
+                
+                # Skip entities with 0 in-scope edges (not traversable in scope)
+                if induced_nodes is not None and in_scope_degree == 0:
+                    continue
+                
+                # Penalize multiword phrase entities (likely extraction artifacts)
+                # E.g., "soul body union" should score lower than "soul"
+                word_count = len(label.split())
+                phrase_penalty = 0.0
+                phrase_reason = ""
+                if word_count >= 3:
+                    phrase_penalty = 0.4  # Strong penalty for 3+ word phrases
+                    phrase_reason = f"phrase_penalty({word_count}w)=-0.4"
+                elif word_count == 2:
+                    phrase_penalty = 0.1  # Mild penalty for 2-word entities
+                    phrase_reason = f"phrase_penalty(2w)=-0.1"
+                
+                # Boost for connectivity (normalized)
+                degree_bonus = min(in_scope_degree / 20.0, 0.3)  # Up to 0.3 bonus
+                
+                # Final score
+                final_score = relevance - phrase_penalty + degree_bonus
+                
+                # Build reason string
+                reason_parts = [reason] if reason else []
+                if phrase_reason:
+                    reason_parts.append(phrase_reason)
+                reason_parts.append(f"degree={in_scope_degree}")
+                
+                # Community info
+                comm_id = self.node_to_community.get(entity_id)
+                
+                scored_entities.append({
+                    "entity_id": entity_id,
+                    "label": label,
+                    "query_relevance": round(final_score, 3),
+                    "reason": "|".join(reason_parts),
+                    "community_id": comm_id,
+                    "in_scope_degree": in_scope_degree,
+                })
+            
+            # Sort by final score
+            scored_entities.sort(key=lambda x: x["query_relevance"], reverse=True)
+            
             return ToolResult(
                 tool_name="get_entities_from_chunks",
                 success=True,
                 data={
-                    "entity_ids": entity_ids,
-                    "count": len(entity_ids),
+                    "entities": scored_entities[:50],  # Cap at 50
+                    "count": len(scored_entities),
+                    "query_tokens": list(query_tokens),
+                    "scope_active": induced_nodes is not None,
                 },
             )
         except Exception as e:
