@@ -10,944 +10,593 @@
         body { 
             margin: 0; 
             overflow: hidden; 
-            background-color: #0a0a0f; 
+            background-color: #000000; 
             color: #fff; 
-            font-family: 'Inter', -apple-system, sans-serif; 
+            font-family: 'Courier New', Courier, monospace; 
         }
-        
-        /* Left Panel - Query & Results */
-        #left-panel {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 400px;
-            height: 100vh;
-            background: rgba(10, 10, 15, 0.95);
-            backdrop-filter: blur(20px);
-            border-right: 1px solid rgba(255,255,255,0.1);
-            display: flex;
-            flex-direction: column;
-            z-index: 100;
-        }
-        
-        #header {
-            padding: 20px;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        h1 { 
-            margin: 0; 
-            font-weight: 300; 
-            letter-spacing: 3px; 
-            font-size: 1rem; 
-            color: #888;
-        }
-        
-        #query-section {
-            padding: 20px;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        #query-input {
-            width: 100%;
-            padding: 12px 15px;
-            background: rgba(255,255,255,0.05);
-            border: 1px solid rgba(255,255,255,0.15);
-            border-radius: 8px;
-            color: #fff;
-            font-size: 14px;
-            resize: none;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-        
-        #query-input:focus {
-            border-color: rgba(100,150,255,0.5);
-        }
-        
-        #query-btn {
-            width: 100%;
-            margin-top: 10px;
-            padding: 12px;
-            background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
-            border: none;
-            border-radius: 8px;
-            color: #fff;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        
-        #query-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-        #query-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-        
-        /* Routing Info */
-        #routing-info {
-            padding: 15px 20px;
-            background: rgba(100,150,255,0.1);
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            display: none;
-        }
-        
-        .routing-label {
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: #6b7280;
-            margin-bottom: 5px;
-        }
-        
-        .community-tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 5px;
-        }
-        
-        .community-tag {
-            padding: 4px 8px;
-            background: rgba(100,150,255,0.2);
-            border-radius: 4px;
-            font-size: 11px;
-            color: #93c5fd;
-        }
-        
-        /* Results Section */
-        #results-section {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-        }
-        
-        #answer-box {
-            display: none;
-            background: rgba(255,255,255,0.03);
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 15px;
-        }
-        
-        #answer-text {
-            font-size: 14px;
-            line-height: 1.6;
-            color: #e5e7eb;
-        }
-        
-        #answer-text sup {
-            color: #60a5fa;
-            cursor: pointer;
-            font-weight: 600;
-        }
-        
-        /* Citations */
-        #citations-section {
-            display: none;
-        }
-        
-        .citation {
-            background: rgba(255,255,255,0.03);
-            border-radius: 6px;
-            padding: 12px;
-            margin-bottom: 8px;
-            border-left: 3px solid #4b5563;
-            font-size: 12px;
-            line-height: 1.5;
-            color: #9ca3af;
-        }
-        
-        .citation-num {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            background: #4b5563;
-            border-radius: 4px;
-            text-align: center;
-            line-height: 20px;
-            font-size: 11px;
-            font-weight: 600;
-            margin-right: 8px;
-            color: #fff;
-        }
-        
-        .citation-community {
-            font-size: 10px;
-            color: #6b7280;
-            margin-left: 5px;
-        }
-        
-        /* Traversal Stats */
-        #traversal-stats {
-            display: none;
-            padding: 15px 20px;
-            background: rgba(16, 185, 129, 0.1);
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            font-size: 12px;
-        }
-        
-        .stat-row {
-            display: flex;
-            justify-content: space-between;
-            margin: 3px 0;
-        }
-        
-        .stat-value { color: #10b981; font-weight: 500; }
-        
-        /* Status */
-        #status {
-            padding: 10px 20px;
-            font-size: 12px;
-            color: #6b7280;
-            border-top: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .status-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin: 3px 0;
-        }
-        
-        .status-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: #10b981;
-        }
-        
-        .status-dot.pending { background: #f59e0b; animation: pulse 1s infinite; }
-        .status-dot.error { background: #ef4444; }
-        
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        
-        /* Right side - 3D Graph */
+
         #graph-container {
             position: fixed;
             top: 0;
-            left: 400px;
-            right: 0;
-            bottom: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
         }
-        
-        #3d-graph {
-            width: 100%;
-            height: 100%;
+
+        #terminal-output {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            width: 400px;
+            max-height: 70vh;
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 15px;
+            overflow-y: auto;
+            z-index: 10;
+            display: none;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            font-size: 13px;
         }
+
+        #terminal-output::-webkit-scrollbar { width: 6px; }
+        #terminal-output::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
         
-        /* Graph Info Overlay */
+        .term-header {
+            color: #666;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 5px;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 1px;
+        }
+
+        .citation-ref { color: #00ff00; cursor: pointer; }
+        .citation-ref:hover { text-decoration: underline; }
+
+        #terminal-input-container {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            max-width: 90%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            z-index: 20;
+            font-size: 16px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .term-prompt {
+            color: #fff;
+            margin-right: 10px;
+            white-space: pre;
+            font-weight: bold;
+        }
+
+        #query-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 16px;
+            outline: none;
+        }
+
         #graph-info {
-            position: absolute;
+            position: fixed;
             top: 20px;
             right: 20px;
-            background: rgba(10, 10, 15, 0.9);
-            backdrop-filter: blur(10px);
-            padding: 15px;
-            border-radius: 8px;
-            border: 1px solid rgba(255,255,255,0.1);
+            text-align: right;
+            color: #666;
             font-size: 12px;
-            color: #9ca3af;
-        }
-        
-        #graph-info .stat {
-            display: flex;
-            justify-content: space-between;
-            margin: 5px 0;
-            gap: 20px;
-        }
-        
-        #graph-info .stat-value {
-            color: #fff;
-            font-weight: 500;
-        }
-        
-        /* Node Info Panel */
-        #node-info {
-            position: absolute;
-            bottom: 20px;
-            right: 20px;
-            background: rgba(10, 10, 15, 0.9);
-            backdrop-filter: blur(10px);
-            padding: 15px;
-            border-radius: 8px;
-            border: 1px solid rgba(255,255,255,0.1);
-            max-width: 300px;
-            display: none;
-        }
-        
-        #node-info-name {
-            font-size: 14px;
-            font-weight: 500;
-            margin-bottom: 8px;
-        }
-        
-        #node-info-details {
-            font-size: 12px;
-            color: #9ca3af;
-        }
-        
-        /* Citation Hover Tooltip */
-        #citation-tooltip {
-            position: absolute;
-            background: rgba(10, 10, 15, 0.95);
-            backdrop-filter: blur(12px);
-            padding: 15px;
-            border-radius: 8px;
-            border: 1px solid rgba(96, 165, 250, 0.4);
-            max-width: 350px;
-            max-height: 250px;
-            overflow-y: auto;
-            font-size: 12px;
-            line-height: 1.5;
-            color: #e5e7eb;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-            z-index: 300;
-            display: none;
+            z-index: 5;
             pointer-events: none;
         }
         
-        #citation-tooltip .tooltip-header {
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: #60a5fa;
-            margin-bottom: 8px;
-            font-weight: 600;
+        #citation-tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.95);
+            border: 1px solid #00ff00;
+            padding: 10px;
+            max-width: 300px;
+            font-size: 12px;
+            color: #ddd;
+            display: none;
+            z-index: 100;
+            pointer-events: none;
         }
         
-        #citation-tooltip .tooltip-content {
-            color: #d1d5db;
-        }
-        
-        /* Loading */
         #loading {
             position: fixed;
             inset: 0;
             display: flex;
             justify-content: center;
             align-items: center;
-            background: #0a0a0f;
+            background: #000;
             z-index: 200;
             flex-direction: column;
+            color: #00ff00;
         }
         
         .spinner {
             width: 40px;
             height: 40px;
-            border: 3px solid rgba(255,255,255,0.2);
-            border-top-color: #60a5fa;
+            border: 3px solid rgba(0, 255, 0, 0.3);
+            border-top-color: #00ff00;
             border-radius: 50%;
             animation: spin 1s linear infinite;
             margin-bottom: 15px;
         }
-        
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        #query-btn { display: none; } 
     </style>
 </head>
 <body>
 
     <div id="loading">
         <div class="spinner"></div>
-        <div id="loading-text">Initializing Graph...</div>
+        <div id="loading-text">Initializing System...</div>
     </div>
 
-    <div id="left-panel">
-        <div id="header">
-            <h1>PHILOSOPH<span style="color:#60a5fa">AI</span></h1>
+    <div id="graph-info">
+        <div>NODES: <span id="node-count">-</span></div>
+        <div>EDGES: <span id="edge-count">-</span></div>
+    </div>
+
+    <div id="terminal-output">
+        <div class="term-header">SYSTEM OUTPUT</div>
+        <div id="answer-text"></div>
+        <div id="citations-section" style="margin-top:15px; display:none;">
+            <div class="term-header">SOURCES</div>
+            <div id="citations-list"></div>
         </div>
-        
-        <div id="query-section">
-            <textarea id="query-input" rows="3" placeholder="Ask a question about the knowledge base..."></textarea>
-            <button id="query-btn">Search Knowledge Graph</button>
+        <div id="traversal-stats" style="margin-top:15px; display:none; color: #00ff00;">
+            > Traversal: <span id="nodes-visited">0</span> nodes, <span id="edges-traversed">0</span> edges
         </div>
-        
-        <div id="routing-info">
-            <div class="routing-label">Community Routing</div>
-            <div class="community-tags" id="community-tags"></div>
-        </div>
-        
-        <div id="traversal-stats">
-            <div class="routing-label">Traversal</div>
-            <div class="stat-row"><span>Nodes visited</span><span class="stat-value" id="nodes-visited">-</span></div>
-            <div class="stat-row"><span>Edges traversed</span><span class="stat-value" id="edges-traversed">-</span></div>
-            <div class="stat-row"><span>Hops</span><span class="stat-value" id="hops-count">-</span></div>
-        </div>
-        
-        <div id="results-section">
-            <div id="answer-box">
-                <div id="answer-text"></div>
-            </div>
-            
-            <div id="citations-section">
-                <div class="routing-label" style="margin-bottom: 10px;">Sources</div>
-                <div id="citations-list"></div>
-            </div>
-        </div>
-        
-        <div id="status">
-            <div class="status-item">
-                <span class="status-dot" id="status-dot"></span>
-                <span id="status-text">Ready</span>
-            </div>
+        <div id="status" style="margin-top:10px; color: #666;">
+            > Status: <span id="status-text">Ready</span>
         </div>
     </div>
 
-    <div id="graph-container">
-        <div id="3d-graph"></div>
-        <div id="graph-info">
-            <div class="stat"><span>Nodes</span><span class="stat-value" id="node-count">-</span></div>
-            <div class="stat"><span>Edges</span><span class="stat-value" id="edge-count">-</span></div>
-            <div class="stat"><span>Communities</span><span class="stat-value" id="comm-count">-</span></div>
-        </div>
-        <div id="node-info">
-            <div id="node-info-name"></div>
-            <div id="node-info-details"></div>
-        </div>
-        <div id="citation-tooltip">
-            <div class="tooltip-header">Source</div>
-            <div class="tooltip-content" id="tooltip-content"></div>
-        </div>
+    <div id="terminal-input-container">
+        <span class="term-prompt">[</span>
+        <input type="text" id="query-input" placeholder="Enter query..." autocomplete="off">
+        <span class="term-prompt">]....</span>
+        <button id="query-btn" style="display:none"></button>
     </div>
 
-    <script src="//cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
-    <script src="//cdn.jsdelivr.net/npm/3d-force-graph"></script>
-    <script src="//cdn.jsdelivr.net/npm/three-spritetext"></script>
+    <div id="graph-container"></div>
+    
+    <div id="citation-tooltip"></div>
+
+    <script src="//cdn.jsdelivr.net/npm/force-graph"></script>
     <script>
     (function() {
         const API_BASE = 'http://localhost:8000';
         let Graph;
         let graphData = { nodes: [], links: [] };
         let nodesById = {};
-        let linksById = {};  // Track links by "source-target" key
+        let linksById = {}; 
+        let allKnownNodes = new Map(); // Cache all fetched nodes, even if filtered out
         let highlightNodes = new Set();
-        let highlightLinks = new Set();
-        let traversalNodes = new Set();  // Nodes from query traversal
-        let traversalLinks = new Set();  // Links from query traversal
-        let communityColors = {};
-        let citationData = [];  // Store citation info for hover
+        let traversalNodes = new Set();
+        let traversalLinks = new Set();
+        let citationData = [];
 
-        // Generate colors for communities
-        function getCommunityColor(commId) {
-            if (!communityColors[commId]) {
-                const hue = (commId * 137.508) % 360;  // Golden angle
-                communityColors[commId] = `hsl(${hue}, 70%, 60%)`;
-            }
-            return communityColors[commId];
-        }
-
-        // Initialize 3D Graph
         function initGraph() {
-            const container = document.getElementById('3d-graph');
+            const container = document.getElementById('graph-container');
             
-            Graph = ForceGraph3D()(container)
-                .backgroundColor('#0a0a0f')
-                .showNavInfo(false)
-                .nodeThreeObject(node => {
-                    const group = new THREE.Group();
-                    const isHighlighted = highlightNodes.has(node.id);
-                    const isTraversal = traversalNodes.has(node.id);
-                    const isDimmed = (highlightNodes.size > 0 || traversalNodes.size > 0) && !isHighlighted && !isTraversal;
+            Graph = ForceGraph()(container)
+                .backgroundColor('#000000')
+                .width(window.innerWidth)
+                .height(window.innerHeight)
+                .nodeCanvasObject((node, ctx, globalScale) => {
+                    const label = node.label || node.id;
+                    const fontSize = 12 / globalScale;
+                    ctx.font = `${fontSize}px "Courier New", monospace`;
                     
-                    const radius = 2 + Math.sqrt(node.val || 1) * 0.5;
-                    const geometry = new THREE.SphereGeometry(radius, 16, 16);
+                    const r = 4 + Math.sqrt(node.val || 0);
+
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false);
+                    ctx.fillStyle = '#000000';
+                    ctx.fill();
                     
-                    let color = node.community !== undefined 
-                        ? getCommunityColor(node.community)
-                        : '#ffffff';
-                    
-                    if (isTraversal) color = '#10b981';  // Green for traversal
-                    if (isHighlighted) color = '#60a5fa';  // Blue for selection
-                    
-                    const material = new THREE.MeshLambertMaterial({
-                        color: color,
-                        transparent: true,
-                        opacity: isDimmed ? 0.08 : 0.85,
-                        emissive: (isHighlighted || isTraversal) ? color : 0x000000,
-                        emissiveIntensity: (isHighlighted || isTraversal) ? 0.3 : 0
-                    });
-                    
-                    const sphere = new THREE.Mesh(geometry, material);
-                    group.add(sphere);
-                    
-                    // Label
-                    if (!isDimmed || isTraversal) {
-                        const label = node.label || node.id;
-                        const shortLabel = label.length > 18 ? label.slice(0, 18) + '…' : label;
-                        const sprite = new SpriteText(shortLabel);
-                        sprite.color = isDimmed ? 'rgba(255,255,255,0.1)' : '#ffffff';
-                        sprite.textHeight = 2.5;
-                        sprite.position.y = radius + 4;
-                        sprite.material.depthTest = false;
-                        group.add(sprite);
+                    if (highlightNodes.has(node.id) || traversalNodes.has(node.id)) {
+                        ctx.strokeStyle = '#00ff00';
+                        ctx.lineWidth = 2 / globalScale;
+                    } else {
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.lineWidth = 1 / globalScale;
                     }
+                    ctx.stroke();
+
+                    if (globalScale > 0.8 || highlightNodes.has(node.id) || traversalNodes.has(node.id) || node.val > 10) {
+                        ctx.fillStyle = '#ffffff';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(label, node.x, node.y);
+                    }
+                })
+                .linkCanvasObject((link, ctx, globalScale) => {
+                    const start = link.source;
+                    const end = link.target;
+                    if (typeof start !== 'object' || typeof end !== 'object') return;
+
+                    const curvature = 0.2;
+                    const dx = end.x - start.x;
+                    const dy = end.y - start.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist === 0) return;
                     
-                    return group;
-                })
-                .linkColor(link => {
-                    if (highlightLinks.has(link)) return '#60a5fa';
-                    const srcId = typeof link.source === 'object' ? link.source.id : link.source;
-                    const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
-                    // Check if this is a traversal link
-                    if (traversalLinks.has(`${srcId}-${tgtId}`) || traversalLinks.has(`${tgtId}-${srcId}`)) return '#10b981';
-                    // Fallback: check if both ends are traversal nodes
-                    if (traversalNodes.has(srcId) && traversalNodes.has(tgtId)) return '#10b981';
-                    return 'rgba(255,255,255,0.06)';
-                })
-                .linkWidth(link => {
-                    if (highlightLinks.has(link)) return 2;
-                    const srcId = typeof link.source === 'object' ? link.source.id : link.source;
-                    const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
-                    // Check if this is a traversal link
-                    if (traversalLinks.has(`${srcId}-${tgtId}`) || traversalLinks.has(`${tgtId}-${srcId}`)) return 1.5;
-                    if (traversalNodes.has(srcId) && traversalNodes.has(tgtId)) return 1.5;
-                    return 0.3;
-                })
-                .linkOpacity(0.6)
-                .linkCurvature(0.25)  // Curved edges
-                .linkCurveRotation(link => {
-                    // Vary rotation based on link to avoid overlapping curves
-                    const srcId = typeof link.source === 'object' ? link.source.id : link.source;
-                    const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
-                    return (srcId + tgtId).split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 360 * Math.PI / 180;
-                })
-                .linkThreeObjectExtend(true)  // Keep default link line + add custom object
-                .linkThreeObject(link => {
-                    // Add label sprite for edge
-                    const label = link.label || link.type || '';
-                    if (!label) return null;
+                    const midX = (start.x + end.x) / 2;
+                    const midY = (start.y + end.y) / 2;
+                    const nx = -dy / dist;
+                    const ny = dx / dist;
+                    const cpX = midX + nx * dist * curvature;
+                    const cpY = midY + ny * dist * curvature;
                     
-                    const srcId = typeof link.source === 'object' ? link.source.id : link.source;
-                    const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
-                    const isTraversalLink = traversalLinks.has(`${srcId}-${tgtId}`) || traversalLinks.has(`${tgtId}-${srcId}`);
-                    const isDimmed = (traversalNodes.size > 0 || highlightNodes.size > 0) && 
-                                     !traversalNodes.has(srcId) && !traversalNodes.has(tgtId) &&
-                                     !highlightNodes.has(srcId) && !highlightNodes.has(tgtId);
+                    const isTraversal = traversalLinks.has(`${start.id}-${end.id}`) || traversalLinks.has(`${end.id}-${start.id}`);
                     
-                    if (isDimmed) return null;  // Don't show labels for dimmed edges
+                    ctx.beginPath();
+                    ctx.moveTo(start.x, start.y);
+                    ctx.quadraticCurveTo(cpX, cpY, end.x, end.y);
+                    ctx.strokeStyle = isTraversal ? '#00ff00' : 'rgba(255, 255, 255, 0.4)';
+                    ctx.lineWidth = (isTraversal ? 2 : 0.5) / globalScale;
+                    ctx.stroke();
                     
-                    const sprite = new SpriteText(label);
-                    sprite.color = isTraversalLink ? '#10b981' : 'rgba(255,255,255,0.5)';
-                    sprite.textHeight = 1.8;
-                    sprite.material.depthTest = false;
-                    return sprite;
-                })
-                .linkPositionUpdate((sprite, { start, end }) => {
-                    // Position label at middle of link
-                    if (sprite) {
-                        const middlePos = Object.assign(
-                            ...['x', 'y', 'z'].map(c => ({ [c]: start[c] + (end[c] - start[c]) / 2 }))
-                        );
-                        Object.assign(sprite.position, middlePos);
+                    const label = link.label || link.type;
+                    if (label && globalScale > 1.2) {
+                        const t = 0.5;
+                        const bx = (1-t)*(1-t)*start.x + 2*(1-t)*t*cpX + t*t*end.x;
+                        const by = (1-t)*(1-t)*start.y + 2*(1-t)*t*cpY + t*t*end.y;
+                        const angle = Math.atan2(dy, dx);
+                        
+                        ctx.save();
+                        ctx.translate(bx, by);
+                        ctx.rotate(angle);
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'bottom';
+                        ctx.fillStyle = isTraversal ? '#00ff00' : '#ffffff';
+                        const fontSize = 8 / globalScale;
+                        ctx.font = `${fontSize}px "Courier New", monospace`;
+                        ctx.fillText(label, 0, -2/globalScale);
+                        ctx.restore();
                     }
                 })
                 .onNodeClick(node => {
                     highlightNodes.clear();
-                    highlightLinks.clear();
-                    
                     if (node) {
                         highlightNodes.add(node.id);
-                        // Find connected nodes
-                        if (node.neighbors) {
-                            node.neighbors.forEach(n => highlightNodes.add(n.id));
-                        }
-                        if (node.links) {
-                            node.links.forEach(link => highlightLinks.add(link));
-                        }
-                        
-                        showNodeInfo(node);
+                        if (node.neighbors) node.neighbors.forEach(n => highlightNodes.add(n.id));
                     }
-                    
-                    updateGraph();
+                    Graph.nodeCanvasObject(Graph.nodeCanvasObject());
                 })
                 .onBackgroundClick(() => {
                     highlightNodes.clear();
-                    highlightLinks.clear();
-                    document.getElementById('node-info').style.display = 'none';
-                    updateGraph();
+                    Graph.nodeCanvasObject(Graph.nodeCanvasObject());
                 });
-
-            // Add lighting
-            const scene = Graph.scene();
-            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            dirLight.position.set(100, 100, 100);
-            scene.add(dirLight);
-            
-            // Force settings
-            Graph.d3Force('charge').strength(-30);
-            Graph.d3Force('link').distance(40);
-        }
-        
-        function updateGraph() {
-            // Refresh both node and link rendering
-            Graph.nodeThreeObject(Graph.nodeThreeObject());
-            Graph.linkThreeObject(Graph.linkThreeObject());
-        }
-        
-        function showNodeInfo(node) {
-            const panel = document.getElementById('node-info');
-            document.getElementById('node-info-name').innerText = node.label || node.id;
-            document.getElementById('node-info-details').innerHTML = `
-                <div>Connections: ${node.val || 0}</div>
-                ${node.community !== undefined ? `<div>Community: ${node.community}</div>` : ''}
-            `;
-            panel.style.display = 'block';
+                
+            Graph.d3Force('charge').strength(-120);
+            Graph.d3Force('link').distance(120);
         }
 
-        // Load graph from API
         async function loadGraph() {
             try {
-                document.getElementById('loading-text').innerText = 'Loading graph...';
-                const res = await fetch(`${API_BASE}/api/graph?limit=2000`);
+                // Fetch a larger dataset to ensure we get the main structure
+                const res = await fetch(`${API_BASE}/api/graph?limit=5000`);
                 if (!res.ok) throw new Error('Failed to load graph');
+                let rawData = await res.json();
                 
-                graphData = await res.json();
-                
-                // Build lookup
-                nodesById = Object.fromEntries(graphData.nodes.map(n => [n.id, n]));
-                linksById = {};
-                
-                // Calculate degrees and build neighbor lists
-                graphData.nodes.forEach(node => {
-                    node.val = 0;
-                    node.neighbors = [];
-                    node.links = [];
+                // 1. Build an adjacency list for the raw data to find connected components
+                const allNodes = new Map();
+                rawData.nodes.forEach(n => {
+                    allNodes.set(n.id, n);
+                    allKnownNodes.set(n.id, n); // Keep a cache of all nodes fetched
                 });
                 
-                graphData.links.forEach(link => {
-                    const srcId = typeof link.source === 'object' ? link.source.id : link.source;
-                    const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
-                    const src = nodesById[srcId];
-                    const tgt = nodesById[tgtId];
-                    
-                    // Build link lookup (both directions)
-                    linksById[`${srcId}-${tgtId}`] = link;
-                    linksById[`${tgtId}-${srcId}`] = link;
-                    
-                    if (src && tgt) {
-                        src.val = (src.val || 0) + 1;
-                        tgt.val = (tgt.val || 0) + 1;
-                        src.neighbors.push(tgt);
-                        tgt.neighbors.push(src);
-                        src.links.push(link);
-                        tgt.links.push(link);
+                const adj = new Map();
+                rawData.nodes.forEach(n => adj.set(n.id, []));
+                
+                // Only consider links where both source and target exist in the node list
+                const validLinks = rawData.links.filter(l => allNodes.has(l.source) && allNodes.has(l.target));
+                
+                validLinks.forEach(link => {
+                    adj.get(link.source).push(link.target);
+                    adj.get(link.target).push(link.source);
+                });
+
+                // 2. Find Connected Components
+                const visited = new Set();
+                const components = [];
+                
+                for (const nodeId of allNodes.keys()) {
+                    if (!visited.has(nodeId)) {
+                        const component = [];
+                        const queue = [nodeId];
+                        visited.add(nodeId);
+                        
+                        while (queue.length > 0) {
+                            const u = queue.shift();
+                            component.push(u);
+                            
+                            const neighbors = adj.get(u) || [];
+                            for (const v of neighbors) {
+                                if (!visited.has(v)) {
+                                    visited.add(v);
+                                    queue.push(v);
+                                }
+                            }
+                        }
+                        components.push(component);
+                    }
+                }
+                
+                console.log(`Found ${components.length} components. Sizes:`, components.map(c => c.length).sort((a,b) => b-a).slice(0, 10));
+
+                if (components.length === 0) return;
+
+                // 3. Keep only the largest component
+                const largestComponentIds = new Set(components.reduce((a, b) => a.length > b.length ? a : b));
+                
+                // Filter nodes and links to this component
+                let mainNodes = rawData.nodes.filter(n => largestComponentIds.has(n.id));
+                let mainLinks = validLinks.filter(l => largestComponentIds.has(l.source) && largestComponentIds.has(l.target));
+
+                // 4. (Optional) Apply the "Top 1 per community" filter to reduce clutter within the main graph
+                // Calculate degrees for the main graph
+                const nodeDegrees = new Map();
+                mainNodes.forEach(n => nodeDegrees.set(n.id, 0));
+                mainLinks.forEach(l => {
+                    nodeDegrees.set(l.source, (nodeDegrees.get(l.source) || 0) + 1);
+                    nodeDegrees.set(l.target, (nodeDegrees.get(l.target) || 0) + 1);
+                });
+
+                // Group by community
+                const nodesByCommunity = {};
+                mainNodes.forEach(n => {
+                    const comm = n.community || 'unknown';
+                    if (!nodesByCommunity[comm]) nodesByCommunity[comm] = [];
+                    // Update node value with degree for sizing
+                    n.val = nodeDegrees.get(n.id); 
+                    nodesByCommunity[comm].push(n);
+                });
+
+                // Select top node per community
+                const finalNodes = [];
+                Object.values(nodesByCommunity).forEach(commNodes => {
+                    // Sort by degree (descending) and take the highest-degree node
+                    commNodes.sort((a, b) => b.val - a.val);
+                    if (commNodes[0]) {
+                        finalNodes.push(commNodes[0]);
                     }
                 });
                 
+                const finalNodeIds = new Set(finalNodes.map(n => n.id));
+                const finalLinks = mainLinks.filter(l => finalNodeIds.has(l.source) && finalNodeIds.has(l.target));
+
+                // Remove nodes that don't participate in any remaining links to avoid isolated halo nodes
+                const linkedNodeIds = new Set();
+                finalLinks.forEach(link => {
+                    linkedNodeIds.add(link.source);
+                    linkedNodeIds.add(link.target);
+                });
+                const connectedFinalNodes = finalNodes.filter(node => linkedNodeIds.has(node.id));
+                const connectedNodeIds = new Set(connectedFinalNodes.map(n => n.id));
+                const connectedFinalLinks = finalLinks.filter(link => connectedNodeIds.has(link.source) && connectedNodeIds.has(link.target));
+
+                // 5. Final assignment
+                graphData = { nodes: connectedFinalNodes, links: connectedFinalLinks };
+                
+                // Re-build lookup maps for the visualizer
+                nodesById = Object.fromEntries(graphData.nodes.map(n => [n.id, n]));
+                
+                // Prepare neighbors arrays for hover effects
+                graphData.nodes.forEach(n => { n.neighbors = []; });
+                graphData.links.forEach(link => {
+                    // In ForceGraph, links might be objects after initialization, but here they are raw IDs
+                    const src = nodesById[link.source];
+                    const tgt = nodesById[link.target];
+                    if (src && tgt) {
+                        src.neighbors.push(tgt);
+                        tgt.neighbors.push(src);
+                    }
+                });
+
                 Graph.graphData(graphData);
                 
-                // Update stats
-                document.getElementById('node-count').innerText = graphData.nodes.length.toLocaleString();
-                document.getElementById('edge-count').innerText = graphData.links.length.toLocaleString();
-                
-                // Load community count
-                try {
-                    const commRes = await fetch(`${API_BASE}/api/communities`);
-                    const commData = await commRes.json();
-                    document.getElementById('comm-count').innerText = commData.communities?.length || '-';
-                } catch (e) {
-                    console.warn('Could not load communities:', e);
-                }
-                
+                document.getElementById('node-count').innerText = graphData.nodes.length;
+                document.getElementById('edge-count').innerText = graphData.links.length;
                 document.getElementById('loading').style.display = 'none';
-                
+
             } catch (err) {
                 console.error(err);
                 document.getElementById('loading-text').innerText = 'Error: ' + err.message;
             }
         }
 
-        // Query function - uses agentic endpoint
         async function runQuery() {
             const question = document.getElementById('query-input').value.trim();
             if (!question) return;
             
-            const btn = document.getElementById('query-btn');
-            btn.disabled = true;
-            btn.innerText = 'Thinking...';
-            
-            setStatus('pending', 'Agent reasoning...');
-            
-            // Clear previous results
-            document.getElementById('routing-info').style.display = 'none';
-            document.getElementById('traversal-stats').style.display = 'none';
-            document.getElementById('answer-box').style.display = 'none';
+            setStatus('pending', 'Thinking...');
+            document.getElementById('terminal-output').style.display = 'block';
+            document.getElementById('answer-text').innerText = '...';
             document.getElementById('citations-section').style.display = 'none';
+            document.getElementById('traversal-stats').style.display = 'none';
+            
             traversalNodes.clear();
             traversalLinks.clear();
             highlightNodes.clear();
-            highlightLinks.clear();
             citationData = [];
             
             try {
-                // Use the agentic endpoint
                 const res = await fetch(`${API_BASE}/api/agent/query`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ question, max_iterations: 25, verbose: false })
                 });
                 
-                if (!res.ok) {
-                    const errData = await res.json().catch(() => ({}));
-                    throw new Error(errData.detail || 'Query failed');
-                }
+                if (!res.ok) throw new Error('Query failed');
                 
                 const data = await res.json();
-                console.log('Agent query response:', data);
                 
-                // Show scope info (replaces routing info for agent endpoint)
-                const scope = data.scope;
-                if (scope && (scope.authors?.length || scope.titles?.length || scope.traditions?.length)) {
-                    document.getElementById('routing-info').style.display = 'block';
-                    const scopeParts = [];
-                    if (scope.authors?.length) scopeParts.push(...scope.authors.map(a => `<span class="community-tag">${a}</span>`));
-                    if (scope.titles?.length) scopeParts.push(...scope.titles.map(t => `<span class="community-tag">${t}</span>`));
-                    if (scope.traditions?.length) scopeParts.push(...scope.traditions.map(t => `<span class="community-tag">${t}</span>`));
-                    document.getElementById('community-tags').innerHTML = scopeParts.join('');
-                }
-                
-                // Show traversal stats and dynamically add nodes/edges from agent
-                const traversal = data.traversal || {};
-                let graphNeedsUpdate = false;
-                
-                // Add edges from traversal that aren't in main graph
-                if (traversal.edges?.length > 0) {
-                    traversal.edges.forEach(edge => {
+                if (data.traversal && data.traversal.edges) {
+                    data.traversal.edges.forEach(edge => {
                         const srcId = edge.source;
                         const tgtId = edge.target;
-                        const linkKey = `${srcId}-${tgtId}`;
-                        const linkKeyRev = `${tgtId}-${srcId}`;
-                        
-                        // Check if nodes exist, add them if not
+                        traversalLinks.add(`${srcId}-${tgtId}`);
+                        traversalNodes.add(srcId);
+                        traversalNodes.add(tgtId);
+                        // Add link if not present
+                        const exists = graphData.links.some(l => (l.source === srcId && l.target === tgtId) || (l.source === tgtId && l.target === srcId));
+                        if (!exists) {
+                            graphData.links.push({ source: srcId, target: tgtId, label: edge.label || edge.type || '' });
+                        }
+
+                        // Ensure nodes exist; restore from cache when possible
                         if (!nodesById[srcId]) {
-                            const newNode = {
-                                id: srcId,
-                                label: srcId,
-                                val: 1,
-                                neighbors: [],
-                                links: [],
-                                _dynamic: true
+                            const cached = allKnownNodes.get(srcId);
+                            const newNode = cached ? { ...cached, _dynamic: true, neighbors: [], links: [], val: cached.val || 5 } : {
+                                id: srcId, label: srcId, val: 1, neighbors: [], links: [], _dynamic: true
                             };
                             graphData.nodes.push(newNode);
                             nodesById[srcId] = newNode;
-                            graphNeedsUpdate = true;
                         }
                         if (!nodesById[tgtId]) {
-                            const newNode = {
-                                id: tgtId,
-                                label: tgtId,
-                                val: 1,
-                                neighbors: [],
-                                links: [],
-                                _dynamic: true
+                            const cached = allKnownNodes.get(tgtId);
+                            const newNode = cached ? { ...cached, _dynamic: true, neighbors: [], links: [], val: cached.val || 5 } : {
+                                id: tgtId, label: tgtId, val: 1, neighbors: [], links: [], _dynamic: true
                             };
                             graphData.nodes.push(newNode);
                             nodesById[tgtId] = newNode;
-                            graphNeedsUpdate = true;
                         }
-                        
-                        if (!linksById[linkKey] && !linksById[linkKeyRev]) {
-                            // New edge not in main DAG - add it
-                            const newLink = {
-                                source: srcId,
-                                target: tgtId,
-                                label: edge.label || '',
-                                _dynamic: true
+                    });
+                }
+                 if (data.collected_entities) {
+                    data.collected_entities.forEach(id => {
+                        // Restore if missing
+                        if (!nodesById[id]) {
+                            const cached = allKnownNodes.get(id);
+                            const newNode = cached ? { ...cached, _dynamic: true, neighbors: [], links: [], val: cached.val || 5 } : {
+                                id, label: id, val: 1, neighbors: [], links: [], _dynamic: true
                             };
-                            graphData.links.push(newLink);
-                            linksById[linkKey] = newLink;
-                            linksById[linkKeyRev] = newLink;
-                            
-                            // Update neighbor references
-                            const src = nodesById[srcId];
-                            const tgt = nodesById[tgtId];
-                            if (src && tgt) {
-                                src.neighbors.push(tgt);
-                                tgt.neighbors.push(src);
-                                src.links.push(newLink);
-                                tgt.links.push(newLink);
-                                src.val = (src.val || 0) + 1;
-                                tgt.val = (tgt.val || 0) + 1;
-                            }
-                            graphNeedsUpdate = true;
+                            graphData.nodes.push(newNode);
+                            nodesById[id] = newNode;
                         }
-                        
-                        // Track as traversal link for highlighting
-                        traversalLinks.add(linkKey);
-                        // Also track both nodes as traversal nodes
-                        traversalNodes.add(srcId);
-                        traversalNodes.add(tgtId);
+                        traversalNodes.add(id);
                     });
                 }
                 
-                // Also add visited_nodes from traversal
-                if (traversal.visited_nodes?.length > 0) {
-                    traversal.visited_nodes.forEach(n => traversalNodes.add(n));
+                // Rebuild neighbors/links for newly added nodes
+                graphData.nodes.forEach(n => { n.neighbors = n.neighbors || []; });
+                graphData.links.forEach(link => {
+                    const src = typeof link.source === 'object' ? link.source : nodesById[link.source];
+                    const tgt = typeof link.target === 'object' ? link.target : nodesById[link.target];
+                    if (src && tgt) {
+                        src.neighbors.push(tgt);
+                        tgt.neighbors.push(src);
+                    }
+                });
+                // Force ForceGraph to ingest the updated dataset (includes nodes outside initial view)
+                Graph.graphData({
+                    nodes: graphData.nodes,
+                    links: graphData.links
+                });
+
+                Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+                
+                citationData = data.citations || [];
+                document.getElementById('answer-text').innerHTML = formatAnswerWithCitations(data.answer, citationData);
+                
+                if (citationData.length > 0) {
+                    document.getElementById('citations-section').style.display = 'block';
+                    document.getElementById('citations-list').innerHTML = citationData.slice(0, 5).map(c => 
+                        `<div>[${c.index}] ${c.preview}</div>`
+                    ).join('');
                 }
                 
-                // IMPORTANT: Also highlight collected_entities - these are nodes discovered from chunks
-                // They represent the "evidence trail" through the knowledge graph
-                if (data.collected_entities?.length > 0) {
-                    data.collected_entities.forEach(entityId => {
-                        // Only add if node exists in loaded graph
-                        if (nodesById[entityId]) {
-                            traversalNodes.add(entityId);
-                        }
-                    });
-                }
-                
-                if (traversalNodes.size > 0 || traversal.edges_traversed > 0 || data.collected_entities?.length > 0) {
+                if (traversalNodes.size > 0) {
                     document.getElementById('traversal-stats').style.display = 'block';
                     document.getElementById('nodes-visited').innerText = traversalNodes.size;
-                    document.getElementById('edges-traversed').innerText = traversal.edges_traversed || traversalLinks.size || '-';
-                    document.getElementById('hops-count').innerText = data.iterations || '-';
+                    document.getElementById('edges-traversed').innerText = traversalLinks.size;
                 }
                 
-                // Update graph if new nodes/edges were added
-                if (graphNeedsUpdate) {
-                    Graph.graphData(graphData);
-                    document.getElementById('node-count').innerText = graphData.nodes.length.toLocaleString();
-                    document.getElementById('edge-count').innerText = graphData.links.length.toLocaleString();
-                } else if (traversalNodes.size > 0 || traversalLinks.size > 0) {
-                    updateGraph();
-                }
-                
-                // Store citation data for hover functionality
-                citationData = data.citations || [];
-                
-                // Show answer with interactive citations
-                document.getElementById('answer-box').style.display = 'block';
-                document.getElementById('answer-text').innerHTML = formatAnswerWithCitations(data.answer || 'No answer generated.', citationData);
-                
-                // Setup citation hover handlers
+                setStatus('ready', 'Done');
                 setupCitationHover();
-                
-                // Show citations list
-                if (data.citations?.length > 0) {
-                    document.getElementById('citations-section').style.display = 'block';
-                    document.getElementById('citations-list').innerHTML = 
-                        data.citations.slice(0, 10).map(c => `
-                            <div class="citation" data-citation-index="${c.index}">
-                                <span class="citation-num">${c.index}</span>
-                                ${escapeHtml(c.preview || c.full_content?.substring(0, 200) || '')}
-                                ${c.community_id != null ? `<span class="citation-community">Community ${c.community_id}</span>` : ''}
-                            </div>
-                        `).join('');
-                }
-                
-                setStatus('ready', 'Query complete');
                 
             } catch (err) {
                 console.error(err);
-                setStatus('error', 'Error: ' + err.message);
-                document.getElementById('answer-box').style.display = 'block';
-                document.getElementById('answer-text').innerHTML = `<span style="color:#ef4444">Error: ${escapeHtml(err.message)}</span>`;
-            } finally {
-                btn.disabled = false;
-                btn.innerText = 'Search Knowledge Graph';
+                setStatus('error', err.message);
+                document.getElementById('answer-text').innerText = 'Error: ' + err.message;
             }
-        }
-
-        function formatAnswer(text) {
-            // Convert [n] citations to superscript
-            return escapeHtml(text).replace(/\[(\d+)\]/g, '<sup>[$1]</sup>');
         }
         
         function formatAnswerWithCitations(text, citations) {
-            // Convert [n] citations to interactive superscript spans
-            return escapeHtml(text).replace(/\[(\d+)\]/g, (match, num) => {
-                const citation = citations.find(c => c.index === parseInt(num));
-                if (citation) {
-                    return `<sup class="citation-ref" data-citation-index="${num}">[${num}]</sup>`;
-                }
-                return `<sup>[${num}]</sup>`;
+            if (!text) return '';
+            return text.replace(/\[(\d+)\]/g, (match, num) => {
+                const c = citations.find(cit => cit.index === parseInt(num));
+                return c ? `<span class="citation-ref" data-index="${num}">[${num}]</span>` : match;
             });
         }
         
         function setupCitationHover() {
             const tooltip = document.getElementById('citation-tooltip');
-            const tooltipContent = document.getElementById('tooltip-content');
-            const answerText = document.getElementById('answer-text');
-            
-            answerText.querySelectorAll('.citation-ref').forEach(ref => {
-                ref.addEventListener('mouseenter', (e) => {
-                    const index = parseInt(ref.dataset.citationIndex);
-                    const citation = citationData.find(c => c.index === index);
-                    
-                    if (citation) {
-                        // Update tooltip content
-                        tooltipContent.innerHTML = escapeHtml(citation.full_content || citation.preview || '');
-                        
-                        // Position tooltip near the citation ref
-                        const rect = ref.getBoundingClientRect();
-                        const graphContainer = document.getElementById('graph-container');
-                        const containerRect = graphContainer.getBoundingClientRect();
-                        
-                        // Check if any node_ids match nodes in graph and try to position over them
-                        if (citation.node_ids?.length > 0) {
-                            const nodeId = citation.node_ids[0];
-                            const node = nodesById[nodeId];
-                            if (node && Graph) {
-                                // Get screen coordinates of the node
-                                const screenCoords = Graph.graph2ScreenCoords(node.x, node.y, node.z);
-                                if (screenCoords) {
-                                    tooltip.style.left = `${containerRect.left + screenCoords.x - 175}px`;
-                                    tooltip.style.top = `${containerRect.top + screenCoords.y - 130}px`;
-                                    tooltip.style.display = 'block';
-                                    
-                                    // Highlight the node
-                                    highlightNodes.clear();
-                                    highlightNodes.add(nodeId);
-                                    updateGraph();
-                                    return;
-                                }
-                            }
-                        }
-                        
-                        // Fallback: position near the citation in the text
-                        tooltip.style.left = `${rect.right + 10}px`;
-                        tooltip.style.top = `${rect.top - 50}px`;
+            document.querySelectorAll('.citation-ref').forEach(el => {
+                el.addEventListener('mouseenter', e => {
+                    const idx = parseInt(el.dataset.index);
+                    const c = citationData.find(cit => cit.index === idx);
+                    if (c) {
+                        tooltip.innerText = c.full_content || c.preview;
+                        tooltip.style.left = e.pageX + 10 + 'px';
+                        tooltip.style.top = e.pageY - 20 + 'px';
                         tooltip.style.display = 'block';
+                        
+                        if (c.node_ids && c.node_ids.length) {
+                             highlightNodes.clear();
+                             c.node_ids.forEach(nid => highlightNodes.add(nid));
+                             Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+                             
+                             const node = nodesById[c.node_ids[0]];
+                             if (node) {
+                                 Graph.centerAt(node.x, node.y, 1000);
+                                 Graph.zoom(3, 2000);
+                             }
+                        }
                     }
                 });
-                
-                ref.addEventListener('mouseleave', () => {
+                el.addEventListener('mouseleave', () => {
                     tooltip.style.display = 'none';
                     highlightNodes.clear();
-                    updateGraph();
+                    Graph.nodeCanvasObject(Graph.nodeCanvasObject());
                 });
             });
         }
-        
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+
+        function setStatus(state, msg) {
+            document.getElementById('status-text').innerText = msg;
+            document.getElementById('status-text').style.color = state === 'error' ? 'red' : (state === 'pending' ? 'yellow' : '#666');
         }
 
-        function setStatus(state, text) {
-            const dot = document.getElementById('status-dot');
-            dot.className = 'status-dot' + (state === 'pending' ? ' pending' : state === 'error' ? ' error' : '');
-            document.getElementById('status-text').innerText = text;
-        }
-
-        // Event listeners
-        document.getElementById('query-btn').addEventListener('click', runQuery);
-        document.getElementById('query-input').addEventListener('keydown', e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                runQuery();
-            }
+        window.addEventListener('resize', () => {
+            if (Graph) Graph.width(window.innerWidth).height(window.innerHeight);
         });
 
-        // Initialize on DOM ready
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => { initGraph(); loadGraph(); });
-        } else {
-            initGraph();
-            loadGraph();
-        }
+        document.getElementById('query-input').addEventListener('keydown', e => {
+            if (e.key === 'Enter') runQuery();
+        });
+
+        initGraph();
+        loadGraph();
     })();
     </script>
 </body>
