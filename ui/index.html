@@ -7,194 +7,623 @@
     <style>
         :root { color-scheme: dark; }
         * { box-sizing: border-box; }
-        body { 
-            margin: 0; 
-            overflow: hidden; 
-            background-color: #000000; 
-            color: #fff; 
-            font-family: 'Courier New', Courier, monospace; 
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
         }
 
         #graph-container {
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
+            inset: 0;
             z-index: 1;
         }
 
-        #terminal-output {
-            position: fixed;
-            top: 20px;
-            left: 20px;
-            width: 400px;
-            max-height: 70vh;
-            background: rgba(0, 0, 0, 0.85);
-            border: 1px solid #333;
-            border-radius: 4px;
-            padding: 15px;
-            overflow-y: auto;
-            z-index: 10;
-            display: none;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-            font-size: 13px;
+        #chatbox {
+            position: absolute;
+            top: 60px;
+            left: 40px;
+            width: min(460px, 90vw);
+            background: #000;
+            border: 1px solid #fff;
+            border-radius: 0;
+            box-shadow: none;
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            overflow: hidden;
+            z-index: 20;
+            cursor: grab;
         }
 
-        #terminal-output::-webkit-scrollbar { width: 6px; }
-        #terminal-output::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
-        
-        .term-header {
-            color: #666;
-            margin-bottom: 10px;
-            border-bottom: 1px solid #333;
-            padding-bottom: 5px;
-            text-transform: uppercase;
+        #chatbox.dragging {
+            cursor: grabbing;
+        }
+
+        .chat-header {
+            padding: 8px 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            text-transform: none;
+            color: #fff;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+        }
+
+        .chat-header span:last-child {
+            color: rgba(255, 255, 255, 0.4);
             font-size: 11px;
-            letter-spacing: 1px;
+            letter-spacing: 0.06em;
         }
 
-        .citation-ref { color: #00ff00; cursor: pointer; }
-        .citation-ref:hover { text-decoration: underline; }
+        #chat-log {
+            max-height: 60vh;
+            padding: 14px 16px 0 16px;
+            overflow-y: auto;
+            font-size: 14px;
+            scrollbar-width: thin;
+            scrollbar-color: #fff transparent;
+        }
 
-        #terminal-input-container {
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 600px;
-            max-width: 90%;
-            background: rgba(0,0,0,0.8);
+        #chat-log::-webkit-scrollbar { width: 6px; }
+        #chat-log::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.4);
+            border-radius: 3px;
+        }
+
+        .chat-line {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 2px;
+            align-items: flex-start;
+            line-height: 1.5;
+        }
+
+        .chat-line:last-child {
+            margin-bottom: 0;
+        }
+
+        .chat-line .prompt-symbol {
+            color: #fff;
+            flex-shrink: 0;
+        }
+
+        .chat-line.user .prompt-symbol,
+        .chat-line.system .prompt-symbol {
+            color: #fff;
+        }
+
+        .chat-line .line-text {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .chat-line.thinking .line-text {
+            color: #fff;
+        }
+
+        #prompt-row {
             display: flex;
             align-items: center;
-            z-index: 20;
-            font-size: 16px;
-            padding: 10px;
-            border-radius: 4px;
+            gap: 12px;
+            padding: 0 16px 10px 16px;
+            background: #000;
+            margin-top: -2px;
+            font-size: 14px;
+            line-height: 1.45;
         }
 
-        .term-prompt {
+        #prompt-row .prompt-symbol {
             color: #fff;
-            margin-right: 10px;
-            white-space: pre;
-            font-weight: bold;
+            font-weight: normal;
+            line-height: 1.45;
         }
 
-        #query-input {
+        #prompt-input {
             flex: 1;
             background: transparent;
             border: none;
             color: #fff;
-            font-family: 'Courier New', Courier, monospace;
-            font-size: 16px;
+            font: inherit;
             outline: none;
+            caret-color: #fff;
+            line-height: 1.45;
+            padding: 0;
         }
 
-        #graph-info {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            text-align: right;
-            color: #666;
-            font-size: 12px;
-            z-index: 5;
-            pointer-events: none;
+        #prompt-input::placeholder {
+            color: rgba(255, 255, 255, 0.45);
         }
-        
+
+        #prompt-input:disabled {
+            color: rgba(255, 255, 255, 0.35);
+        }
+
         #citation-tooltip {
             position: absolute;
             background: rgba(0, 0, 0, 0.95);
-            border: 1px solid #00ff00;
+            border: 1px solid #fff;
             padding: 10px;
-            max-width: 300px;
+            border-radius: 4px;
+            max-width: 320px;
             font-size: 12px;
             color: #ddd;
             display: none;
             z-index: 100;
             pointer-events: none;
         }
-        
+
+        .citation-ref {
+            color: #fff;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .citation-ref:hover { text-decoration: underline; }
+
         #loading {
             position: fixed;
             inset: 0;
             display: flex;
+            flex-direction: column;
             justify-content: center;
             align-items: center;
             background: #000;
             z-index: 200;
-            flex-direction: column;
-            color: #00ff00;
+            color: #00ff8a;
+            letter-spacing: 0.2em;
         }
-        
+
         .spinner {
             width: 40px;
             height: 40px;
-            border: 3px solid rgba(0, 255, 0, 0.3);
-            border-top-color: #00ff00;
+            border: 3px solid rgba(0, 255, 138, 0.2);
+            border-top-color: #00ff8a;
             border-radius: 50%;
             animation: spin 1s linear infinite;
             margin-bottom: 15px;
         }
-        @keyframes spin { to { transform: rotate(360deg); } }
 
-        #query-btn { display: none; } 
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
-
     <div id="loading">
         <div class="spinner"></div>
         <div id="loading-text">Initializing System...</div>
     </div>
 
-    <div id="graph-info">
-        <div>NODES: <span id="node-count">-</span></div>
-        <div>EDGES: <span id="edge-count">-</span></div>
-    </div>
-
-    <div id="terminal-output">
-        <div class="term-header">SYSTEM OUTPUT</div>
-        <div id="answer-text"></div>
-        <div id="citations-section" style="margin-top:15px; display:none;">
-            <div class="term-header">SOURCES</div>
-            <div id="citations-list"></div>
-        </div>
-        <div id="traversal-stats" style="margin-top:15px; display:none; color: #00ff00;">
-            > Traversal: <span id="nodes-visited">0</span> nodes, <span id="edges-traversed">0</span> edges
-        </div>
-        <div id="status" style="margin-top:10px; color: #666;">
-            > Status: <span id="status-text">Ready</span>
-        </div>
-    </div>
-
-    <div id="terminal-input-container">
-        <span class="term-prompt">[</span>
-        <input type="text" id="query-input" placeholder="Enter query..." autocomplete="off">
-        <span class="term-prompt">]....</span>
-        <button id="query-btn" style="display:none"></button>
-    </div>
-
     <div id="graph-container"></div>
-    
+
+    <div id="chatbox" role="region" aria-label="Conversation window">
+        <div class="chat-header">
+            <span>PHIL KNOWLEDGE SYSTEM</span>
+            <span></span>
+        </div>
+        <div id="chat-log" aria-live="polite"></div>
+        <div id="prompt-row">
+            <span class="prompt-symbol">&gt;</span>
+            <input id="prompt-input" type="text" placeholder="" autocomplete="off" spellcheck="false" disabled>
+        </div>
+    </div>
+
     <div id="citation-tooltip"></div>
 
     <script src="//cdn.jsdelivr.net/npm/force-graph"></script>
     <script>
     (function() {
+        'use strict';
+
         const API_BASE = 'http://localhost:8000';
         let Graph;
         let graphData = { nodes: [], links: [] };
         let nodesById = {};
-        let linksById = {}; 
-        let allKnownNodes = new Map(); // Cache all fetched nodes, even if filtered out
-        let highlightNodes = new Set();
-        let traversalNodes = new Set();
-        let traversalLinks = new Set();
+        const allKnownNodes = new Map();
+        const highlightNodes = new Set();
+        const traversalNodes = new Set();
+        const traversalLinks = new Set();
         let citationData = [];
+        let citationHoverSeq = 0;
+        let chatboxRect = null;
+
+        const chatbox = document.getElementById('chatbox');
+        const chatLog = document.getElementById('chat-log');
+        const promptInput = document.getElementById('prompt-input');
+        const promptRow = document.getElementById('prompt-row');
+
+        const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+        const htmlEscapes = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
+        function escapeHtml(str = '') {
+            return String(str).replace(/[&<>"']/g, ch => htmlEscapes[ch]);
+        }
+
+        function formatText(str = '') {
+            return escapeHtml(str).replace(/(?:\r\n|\r|\n)/g, '<br>');
+        }
+
+        function setLineContent(el, text, { trusted = false } = {}) {
+            el.innerHTML = trusted ? text : formatText(text);
+        }
+
+        function appendLine(role, text = '', options = {}) {
+            const line = document.createElement('div');
+            line.className = `chat-line ${role}`;
+            const prompt = document.createElement('span');
+            prompt.className = 'prompt-symbol';
+            prompt.textContent = '>';
+            const textEl = document.createElement('span');
+            textEl.className = 'line-text';
+            if (text) setLineContent(textEl, text, options);
+            line.appendChild(prompt);
+            line.appendChild(textEl);
+            chatLog.appendChild(line);
+            chatLog.scrollTop = chatLog.scrollHeight;
+            return {
+                line,
+                textEl,
+                setContent: (value, opts = {}) => setLineContent(textEl, value, opts)
+            };
+        }
+
+        function startThinkingLine() {
+            const frames = ['.', '..', '...'];
+            let idx = 0;
+            const { line, setContent } = appendLine('ai', frames[0]);
+            line.classList.add('thinking');
+            const interval = setInterval(() => {
+                idx = (idx + 1) % frames.length;
+                setContent(frames[idx]);
+            }, 320);
+            return {
+                complete(finalText, opts = {}) {
+                    clearInterval(interval);
+                    line.classList.remove('thinking');
+                    if (finalText !== undefined) {
+                        setContent(finalText || '', opts);
+                    }
+                }
+            };
+        }
+
+        function sanitizeAnswer(text, citations) {
+            if (!text) return '';
+
+            // Map chunk_id -> index for cases where the model returns [[chunk_id]] or [chunk_id]
+            const chunkIdToIndex = new Map();
+            (citations || []).forEach(c => {
+                if (c && c.chunk_id != null) {
+                    chunkIdToIndex.set(String(c.chunk_id), c.index);
+                }
+            });
+
+            const cite = (num) => {
+                const c = citations.find(cit => cit.index === parseInt(num, 10));
+                // Use HTML entities for [ ] to avoid regex double-wrapping.
+                return c
+                    ? `<span class="citation-ref" data-index="${num}">&#91;${num}&#93;</span>`
+                    : `[${num}]`;
+            };
+
+            let out = text;
+
+            // Replace [[chunk_id]] or [chunk_id] with numeric citations if we have a mapping
+            out = out.replace(/\[\[([^\]]+)\]\]|\[([^\]]+)\]/g, (match, g1, g2) => {
+                const id = g1 || g2;
+                if (!id) return match;
+                const idx = chunkIdToIndex.get(id.trim());
+                return idx ? cite(idx) : match;
+            });
+
+            // Handle grouped citations like [2, 3, 4]
+            out = out.replace(/\[(\d+(?:\s*,\s*\d+)+)\]/g, (_match, nums) => {
+                return String(nums)
+                    .split(/\s*,\s*/)
+                    .map(n => cite(n))
+                    .join(', ');
+            });
+
+            // Handle single citations like [1]
+            out = out.replace(/\[(\d+)\]/g, (_match, num) => cite(num));
+
+            return out;
+        }
+
+        function focusPrompt() {
+            promptInput.focus({ preventScroll: true });
+        }
+
+        function setPromptVisible(visible) {
+            if (visible) {
+                promptRow.style.display = 'flex';
+            } else {
+                promptRow.style.display = 'none';
+            }
+        }
+
+        function enablePrompt() {
+            promptInput.disabled = false;
+            promptInput.placeholder = '';
+            setPromptVisible(true);
+            focusPrompt();
+        }
+
+        function disablePrompt() {
+            promptInput.disabled = true;
+            setPromptVisible(false);
+        }
+
+        function bootSequence() {
+            disablePrompt();
+            const thinker = startThinkingLine();
+            setTimeout(() => {
+                thinker.complete('Greetings. Ready.');
+                enablePrompt();
+            }, 2000);
+        }
+
+        function handlePromptSubmit(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                runQuery();
+            }
+        }
+
+        async function runQuery() {
+            const question = promptInput.value.trim();
+            if (!question) return;
+
+            appendLine('user', question);
+            promptInput.value = '';
+            disablePrompt();
+
+            traversalNodes.clear();
+            traversalLinks.clear();
+            highlightNodes.clear();
+
+            const tooltip = document.getElementById('citation-tooltip');
+            if (tooltip) tooltip.style.display = 'none';
+            resetGraphToBase();
+
+            const thinker = startThinkingLine();
+
+            try {
+                const res = await fetch(`${API_BASE}/api/agent/query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question, max_iterations: 25, verbose: false })
+                });
+
+                if (!res.ok) throw new Error('Query failed');
+
+                const data = await res.json();
+
+                citationData = data.citations || [];
+                processTraversal(data);
+
+                const formattedAnswer = sanitizeAnswer(data.answer, citationData) || '...';
+                thinker.complete(formattedAnswer, { trusted: true });
+                setupCitationHover();
+
+                if (traversalNodes.size > 0) {
+                    appendLine('system', `Traversal ${traversalNodes.size} nodes // ${traversalLinks.size} edges`);
+                }
+            } catch (err) {
+                thinker.complete(`Error: ${err.message}`);
+            } finally {
+                enablePrompt();
+            }
+        }
+
+        function processTraversal(data) {
+            if (!data) return;
+
+            if (data.traversal && Array.isArray(data.traversal.edges)) {
+                data.traversal.edges.forEach(edge => {
+                    const srcId = edge.source;
+                    const tgtId = edge.target;
+                    if (!srcId || !tgtId) return;
+                    traversalLinks.add(`${srcId}-${tgtId}`);
+                    traversalNodes.add(srcId);
+                    traversalNodes.add(tgtId);
+
+                    const exists = graphData.links.some(l =>
+                        (l.source === srcId && l.target === tgtId) ||
+                        (l.source === tgtId && l.target === srcId)
+                    );
+                    if (!exists) {
+                        graphData.links.push({ source: srcId, target: tgtId, label: edge.label || edge.type || '', _dynamic: true, isBase: false });
+                    }
+
+                    ensureNode(srcId);
+                    ensureNode(tgtId);
+                });
+            }
+
+            if (Array.isArray(data.collected_entities)) {
+                data.collected_entities.forEach(id => {
+                    ensureNode(id);
+                    traversalNodes.add(id);
+                });
+            }
+
+            // Ensure citation source nodes exist so hover can focus them
+            if (Array.isArray(citationData)) {
+                citationData.forEach(c => {
+                    if (c && Array.isArray(c.node_ids)) {
+                        c.node_ids.forEach(id => {
+                            ensureNode(id);
+                            traversalNodes.add(id);
+                        });
+                    }
+                });
+            }
+
+            graphData.nodes.forEach(n => { n.neighbors = n.neighbors || []; });
+            graphData.links.forEach(link => {
+                const src = typeof link.source === 'object' ? link.source : nodesById[link.source];
+                const tgt = typeof link.target === 'object' ? link.target : nodesById[link.target];
+                if (src && tgt) {
+                    if (!src.neighbors.includes(tgt)) src.neighbors.push(tgt);
+                    if (!tgt.neighbors.includes(src)) tgt.neighbors.push(src);
+                }
+            });
+
+            Graph.graphData({
+                nodes: graphData.nodes,
+                links: graphData.links
+            });
+            Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+        }
+
+        function ensureNode(id) {
+            if (!id || nodesById[id]) return;
+            const cached = allKnownNodes.get(id);
+            const newNode = cached
+                ? { ...cached, neighbors: (cached.neighbors || []).slice(), val: cached.val || 5, _dynamic: true, isBase: false }
+                : { id, label: id, val: 1, neighbors: [], _dynamic: true, isBase: false };
+            graphData.nodes.push(newNode);
+            nodesById[id] = newNode;
+        }
+
+        function resetGraphToBase() {
+            if (!Graph || !graphData || !Array.isArray(graphData.nodes) || !Array.isArray(graphData.links)) return;
+
+            const baseNodes = graphData.nodes.filter(n => n && n.isBase);
+            const baseNodeIds = new Set(baseNodes.map(n => n.id));
+
+            const baseLinks = graphData.links.filter(l => {
+                if (!l || !l.isBase) return false;
+                const s = typeof l.source === 'object' ? l.source.id : l.source;
+                const t = typeof l.target === 'object' ? l.target.id : l.target;
+                return baseNodeIds.has(s) && baseNodeIds.has(t);
+            });
+
+            graphData = { nodes: baseNodes, links: baseLinks };
+            nodesById = Object.fromEntries(graphData.nodes.map(n => [n.id, n]));
+
+            graphData.nodes.forEach(n => { n.neighbors = []; });
+            graphData.links.forEach(link => {
+                const s = typeof link.source === 'object' ? link.source.id : link.source;
+                const t = typeof link.target === 'object' ? link.target.id : link.target;
+                const src = nodesById[s];
+                const tgt = nodesById[t];
+                if (src && tgt) {
+                    src.neighbors.push(tgt);
+                    tgt.neighbors.push(src);
+                }
+            });
+
+            Graph.graphData(graphData);
+            Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+        }
+
+        function setupCitationHover() {
+            const tooltip = document.getElementById('citation-tooltip');
+            const graphContainer = document.getElementById('graph-container');
+            const getCanvasRect = () => {
+                const canvas = graphContainer.querySelector('canvas');
+                return canvas ? canvas.getBoundingClientRect() : graphContainer.getBoundingClientRect();
+            };
+
+            function getNodeScreenPosition(nodeId) {
+                const node = nodesById[nodeId];
+                if (!node || !Graph) return null;
+                const coords = Graph.graph2ScreenCoords(node.x, node.y);
+                if (!coords) return null;
+                const rect = getCanvasRect();
+                return { x: rect.left + coords.x, y: rect.top + coords.y };
+            }
+
+            function showTooltip(content, targetPos) {
+                const safeContent = content || 'Source';
+                tooltip.innerHTML = formatText(safeContent);
+                tooltip.style.display = 'block';
+                const tipRect = tooltip.getBoundingClientRect();
+
+                // Offset to the right of the node and slightly above center
+                const offsetX = 14;
+                const offsetY = -tipRect.height * 0.25;
+
+                let posX = targetPos.x + offsetX;
+                let posY = targetPos.y + offsetY;
+
+                // Clamp inside viewport with 10px padding
+                posX = Math.min(window.innerWidth - tipRect.width - 10, Math.max(10, posX));
+                posY = Math.min(window.innerHeight - tipRect.height - 10, Math.max(10, posY));
+
+                tooltip.style.left = `${posX}px`;
+                tooltip.style.top = `${posY}px`;
+            }
+
+            function trackTooltipToNode(seq, content, nodeIds, attempt = 0) {
+                if (seq !== citationHoverSeq) return;
+                if (!Array.isArray(nodeIds) || !nodeIds.length || attempt > 180) return;
+                const nodePosition = nodeIds.map(getNodeScreenPosition).find(Boolean);
+                if (nodePosition) {
+                    showTooltip(content, nodePosition);
+                }
+                requestAnimationFrame(() => trackTooltipToNode(seq, content, nodeIds, attempt + 1));
+            }
+
+            function focusNodeView(seq, nodeIds, attempt = 0) {
+                if (seq !== citationHoverSeq) return;
+                if (!Graph || !Array.isArray(nodeIds) || !nodeIds.length || attempt > 180) return;
+                const node = nodeIds
+                    .map(id => nodesById[id])
+                    .find(n => n && Number.isFinite(n.x) && Number.isFinite(n.y));
+                if (!node) {
+                    requestAnimationFrame(() => focusNodeView(seq, nodeIds, attempt + 1));
+                    return;
+                }
+                Graph.centerAt(node.x, node.y, 600);
+                Graph.zoom(4, 600);
+            }
+
+            document.querySelectorAll('.citation-ref').forEach(el => {
+                el.onmouseenter = e => {
+                    const idx = parseInt(el.dataset.index, 10);
+                    const c = citationData.find(cit => cit.index === idx);
+                    if (!c) return;
+
+                    const content = c.full_content || c.preview || '';
+                    const nodeIds = Array.isArray(c.node_ids) ? c.node_ids : [];
+
+                    // start a new hover session (cancels any in-flight tracking)
+                    citationHoverSeq += 1;
+                    const seq = citationHoverSeq;
+
+                    const nodePosition = nodeIds.map(getNodeScreenPosition).find(Boolean);
+                    const targetPos = nodePosition || { x: e.clientX, y: e.clientY };
+                    showTooltip(content, targetPos);
+
+                    // Keep the tooltip pinned to the node while the camera animates
+                    trackTooltipToNode(seq, content, nodeIds);
+
+                    if (nodeIds.length) {
+                        highlightNodes.clear();
+                        nodeIds.forEach(nid => highlightNodes.add(nid));
+                        Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+                        focusNodeView(seq, nodeIds);
+                    }
+                };
+
+                el.onmouseleave = () => {
+                    citationHoverSeq += 1;
+                    tooltip.style.display = 'none';
+                    highlightNodes.clear();
+                    Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+                };
+            });
+        }
 
         function initGraph() {
             const container = document.getElementById('graph-container');
-            
+
             Graph = ForceGraph()(container)
                 .backgroundColor('#000000')
                 .width(window.innerWidth)
@@ -203,24 +632,20 @@
                     const label = node.label || node.id;
                     const fontSize = 12 / globalScale;
                     ctx.font = `${fontSize}px "Courier New", monospace`;
-                    
+
                     const r = 4 + Math.sqrt(node.val || 0);
 
                     ctx.beginPath();
                     ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false);
-                    ctx.fillStyle = '#000000';
+                    ctx.fillStyle = '#000';
                     ctx.fill();
-                    
-                    if (highlightNodes.has(node.id) || traversalNodes.has(node.id)) {
-                        ctx.strokeStyle = '#00ff00';
-                        ctx.lineWidth = 2 / globalScale;
-                    } else {
-                        ctx.strokeStyle = '#ffffff';
-                        ctx.lineWidth = 1 / globalScale;
-                    }
+
+                    const isActive = highlightNodes.has(node.id) || traversalNodes.has(node.id);
+                    ctx.strokeStyle = isActive ? '#00ff8a' : '#ffffff';
+                    ctx.lineWidth = isActive ? 2 / globalScale : 1 / globalScale;
                     ctx.stroke();
 
-                    if (globalScale > 0.8 || highlightNodes.has(node.id) || traversalNodes.has(node.id) || node.val > 10) {
+                    if (globalScale > 0.8 || isActive || node.val > 10) {
                         ctx.fillStyle = '#ffffff';
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
@@ -237,39 +662,39 @@
                     const dy = end.y - start.y;
                     const dist = Math.sqrt(dx * dx + dy * dy);
                     if (dist === 0) return;
-                    
+
                     const midX = (start.x + end.x) / 2;
                     const midY = (start.y + end.y) / 2;
                     const nx = -dy / dist;
                     const ny = dx / dist;
                     const cpX = midX + nx * dist * curvature;
                     const cpY = midY + ny * dist * curvature;
-                    
+
                     const isTraversal = traversalLinks.has(`${start.id}-${end.id}`) || traversalLinks.has(`${end.id}-${start.id}`);
-                    
+
                     ctx.beginPath();
                     ctx.moveTo(start.x, start.y);
                     ctx.quadraticCurveTo(cpX, cpY, end.x, end.y);
-                    ctx.strokeStyle = isTraversal ? '#00ff00' : 'rgba(255, 255, 255, 0.4)';
+                    ctx.strokeStyle = isTraversal ? '#00ff8a' : 'rgba(255, 255, 255, 0.4)';
                     ctx.lineWidth = (isTraversal ? 2 : 0.5) / globalScale;
                     ctx.stroke();
-                    
+
                     const label = link.label || link.type;
                     if (label && globalScale > 1.2) {
                         const t = 0.5;
-                        const bx = (1-t)*(1-t)*start.x + 2*(1-t)*t*cpX + t*t*end.x;
-                        const by = (1-t)*(1-t)*start.y + 2*(1-t)*t*cpY + t*t*end.y;
+                        const bx = (1 - t) * (1 - t) * start.x + 2 * (1 - t) * t * cpX + t * t * end.x;
+                        const by = (1 - t) * (1 - t) * start.y + 2 * (1 - t) * t * cpY + t * t * end.y;
                         const angle = Math.atan2(dy, dx);
-                        
+
                         ctx.save();
                         ctx.translate(bx, by);
                         ctx.rotate(angle);
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'bottom';
-                        ctx.fillStyle = isTraversal ? '#00ff00' : '#ffffff';
+                        ctx.fillStyle = isTraversal ? '#00ff8a' : '#ffffff';
                         const fontSize = 8 / globalScale;
                         ctx.font = `${fontSize}px "Courier New", monospace`;
-                        ctx.fillText(label, 0, -2/globalScale);
+                        ctx.fillText(label, 0, -2 / globalScale);
                         ctx.restore();
                     }
                 })
@@ -277,7 +702,9 @@
                     highlightNodes.clear();
                     if (node) {
                         highlightNodes.add(node.id);
-                        if (node.neighbors) node.neighbors.forEach(n => highlightNodes.add(n.id));
+                        if (Array.isArray(node.neighbors)) {
+                            node.neighbors.forEach(n => highlightNodes.add(n.id));
+                        }
                     }
                     Graph.nodeCanvasObject(Graph.nodeCanvasObject());
                 })
@@ -285,75 +712,63 @@
                     highlightNodes.clear();
                     Graph.nodeCanvasObject(Graph.nodeCanvasObject());
                 });
-                
+
             Graph.d3Force('charge').strength(-120);
             Graph.d3Force('link').distance(120);
+            Graph.onEngineTick(() => repelGraphFromChatbox());
         }
 
         async function loadGraph() {
             try {
-                // Fetch a larger dataset to ensure we get the main structure
                 const res = await fetch(`${API_BASE}/api/graph?limit=5000`);
                 if (!res.ok) throw new Error('Failed to load graph');
-                let rawData = await res.json();
-                
-                // 1. Build an adjacency list for the raw data to find connected components
+                const rawData = await res.json();
+
                 const allNodes = new Map();
                 rawData.nodes.forEach(n => {
                     allNodes.set(n.id, n);
-                    allKnownNodes.set(n.id, n); // Keep a cache of all nodes fetched
+                    allKnownNodes.set(n.id, n);
                 });
-                
+
                 const adj = new Map();
                 rawData.nodes.forEach(n => adj.set(n.id, []));
-                
-                // Only consider links where both source and target exist in the node list
                 const validLinks = rawData.links.filter(l => allNodes.has(l.source) && allNodes.has(l.target));
-                
+
                 validLinks.forEach(link => {
                     adj.get(link.source).push(link.target);
                     adj.get(link.target).push(link.source);
                 });
 
-                // 2. Find Connected Components
                 const visited = new Set();
                 const components = [];
-                
+
                 for (const nodeId of allNodes.keys()) {
                     if (!visited.has(nodeId)) {
                         const component = [];
                         const queue = [nodeId];
                         visited.add(nodeId);
-                        
+
                         while (queue.length > 0) {
-                            const u = queue.shift();
-                            component.push(u);
-                            
-                            const neighbors = adj.get(u) || [];
-                            for (const v of neighbors) {
-                                if (!visited.has(v)) {
-                                    visited.add(v);
-                                    queue.push(v);
+                            const current = queue.shift();
+                            component.push(current);
+                            const neighbors = adj.get(current) || [];
+                            neighbors.forEach(next => {
+                                if (!visited.has(next)) {
+                                    visited.add(next);
+                                    queue.push(next);
                                 }
-                            }
+                            });
                         }
                         components.push(component);
                     }
                 }
-                
-                console.log(`Found ${components.length} components. Sizes:`, components.map(c => c.length).sort((a,b) => b-a).slice(0, 10));
 
                 if (components.length === 0) return;
 
-                // 3. Keep only the largest component
-                const largestComponentIds = new Set(components.reduce((a, b) => a.length > b.length ? a : b));
-                
-                // Filter nodes and links to this component
-                let mainNodes = rawData.nodes.filter(n => largestComponentIds.has(n.id));
-                let mainLinks = validLinks.filter(l => largestComponentIds.has(l.source) && largestComponentIds.has(l.target));
+                const largestComponentIds = new Set(components.reduce((a, b) => (a.length > b.length ? a : b)));
+                const mainNodes = rawData.nodes.filter(n => largestComponentIds.has(n.id));
+                const mainLinks = validLinks.filter(l => largestComponentIds.has(l.source) && largestComponentIds.has(l.target));
 
-                // 4. (Optional) Apply the "Top 1 per community" filter to reduce clutter within the main graph
-                // Calculate degrees for the main graph
                 const nodeDegrees = new Map();
                 mainNodes.forEach(n => nodeDegrees.set(n.id, 0));
                 mainLinks.forEach(l => {
@@ -361,30 +776,23 @@
                     nodeDegrees.set(l.target, (nodeDegrees.get(l.target) || 0) + 1);
                 });
 
-                // Group by community
                 const nodesByCommunity = {};
                 mainNodes.forEach(n => {
                     const comm = n.community || 'unknown';
                     if (!nodesByCommunity[comm]) nodesByCommunity[comm] = [];
-                    // Update node value with degree for sizing
-                    n.val = nodeDegrees.get(n.id); 
+                    n.val = nodeDegrees.get(n.id);
                     nodesByCommunity[comm].push(n);
                 });
 
-                // Select top node per community
                 const finalNodes = [];
                 Object.values(nodesByCommunity).forEach(commNodes => {
-                    // Sort by degree (descending) and take the highest-degree node
                     commNodes.sort((a, b) => b.val - a.val);
-                    if (commNodes[0]) {
-                        finalNodes.push(commNodes[0]);
-                    }
+                    if (commNodes[0]) finalNodes.push(commNodes[0]);
                 });
-                
+
                 const finalNodeIds = new Set(finalNodes.map(n => n.id));
                 const finalLinks = mainLinks.filter(l => finalNodeIds.has(l.source) && finalNodeIds.has(l.target));
 
-                // Remove nodes that don't participate in any remaining links to avoid isolated halo nodes
                 const linkedNodeIds = new Set();
                 finalLinks.forEach(link => {
                     linkedNodeIds.add(link.source);
@@ -394,16 +802,16 @@
                 const connectedNodeIds = new Set(connectedFinalNodes.map(n => n.id));
                 const connectedFinalLinks = finalLinks.filter(link => connectedNodeIds.has(link.source) && connectedNodeIds.has(link.target));
 
-                // 5. Final assignment
                 graphData = { nodes: connectedFinalNodes, links: connectedFinalLinks };
-                
-                // Re-build lookup maps for the visualizer
+
+                // Mark this as the base (initial) graph state so we can reset between queries
+                graphData.nodes.forEach(n => { n.isBase = true; });
+                graphData.links.forEach(l => { l.isBase = true; });
+
                 nodesById = Object.fromEntries(graphData.nodes.map(n => [n.id, n]));
-                
-                // Prepare neighbors arrays for hover effects
+
                 graphData.nodes.forEach(n => { n.neighbors = []; });
                 graphData.links.forEach(link => {
-                    // In ForceGraph, links might be objects after initialization, but here they are raw IDs
                     const src = nodesById[link.source];
                     const tgt = nodesById[link.target];
                     if (src && tgt) {
@@ -413,188 +821,109 @@
                 });
 
                 Graph.graphData(graphData);
-                
-                document.getElementById('node-count').innerText = graphData.nodes.length;
-                document.getElementById('edge-count').innerText = graphData.links.length;
                 document.getElementById('loading').style.display = 'none';
-
+                bootSequence();
             } catch (err) {
                 console.error(err);
                 document.getElementById('loading-text').innerText = 'Error: ' + err.message;
             }
         }
 
-        async function runQuery() {
-            const question = document.getElementById('query-input').value.trim();
-            if (!question) return;
-            
-            setStatus('pending', 'Thinking...');
-            document.getElementById('terminal-output').style.display = 'block';
-            document.getElementById('answer-text').innerText = '...';
-            document.getElementById('citations-section').style.display = 'none';
-            document.getElementById('traversal-stats').style.display = 'none';
-            
-            traversalNodes.clear();
-            traversalLinks.clear();
-            highlightNodes.clear();
-            citationData = [];
-            
-            try {
-                const res = await fetch(`${API_BASE}/api/agent/query`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question, max_iterations: 25, verbose: false })
-                });
-                
-                if (!res.ok) throw new Error('Query failed');
-                
-                const data = await res.json();
-                
-                if (data.traversal && data.traversal.edges) {
-                    data.traversal.edges.forEach(edge => {
-                        const srcId = edge.source;
-                        const tgtId = edge.target;
-                        traversalLinks.add(`${srcId}-${tgtId}`);
-                        traversalNodes.add(srcId);
-                        traversalNodes.add(tgtId);
-                        // Add link if not present
-                        const exists = graphData.links.some(l => (l.source === srcId && l.target === tgtId) || (l.source === tgtId && l.target === srcId));
-                        if (!exists) {
-                            graphData.links.push({ source: srcId, target: tgtId, label: edge.label || edge.type || '' });
-                        }
-
-                        // Ensure nodes exist; restore from cache when possible
-                        if (!nodesById[srcId]) {
-                            const cached = allKnownNodes.get(srcId);
-                            const newNode = cached ? { ...cached, _dynamic: true, neighbors: [], links: [], val: cached.val || 5 } : {
-                                id: srcId, label: srcId, val: 1, neighbors: [], links: [], _dynamic: true
-                            };
-                            graphData.nodes.push(newNode);
-                            nodesById[srcId] = newNode;
-                        }
-                        if (!nodesById[tgtId]) {
-                            const cached = allKnownNodes.get(tgtId);
-                            const newNode = cached ? { ...cached, _dynamic: true, neighbors: [], links: [], val: cached.val || 5 } : {
-                                id: tgtId, label: tgtId, val: 1, neighbors: [], links: [], _dynamic: true
-                            };
-                            graphData.nodes.push(newNode);
-                            nodesById[tgtId] = newNode;
-                        }
-                    });
-                }
-                 if (data.collected_entities) {
-                    data.collected_entities.forEach(id => {
-                        // Restore if missing
-                        if (!nodesById[id]) {
-                            const cached = allKnownNodes.get(id);
-                            const newNode = cached ? { ...cached, _dynamic: true, neighbors: [], links: [], val: cached.val || 5 } : {
-                                id, label: id, val: 1, neighbors: [], links: [], _dynamic: true
-                            };
-                            graphData.nodes.push(newNode);
-                            nodesById[id] = newNode;
-                        }
-                        traversalNodes.add(id);
-                    });
-                }
-                
-                // Rebuild neighbors/links for newly added nodes
-                graphData.nodes.forEach(n => { n.neighbors = n.neighbors || []; });
-                graphData.links.forEach(link => {
-                    const src = typeof link.source === 'object' ? link.source : nodesById[link.source];
-                    const tgt = typeof link.target === 'object' ? link.target : nodesById[link.target];
-                    if (src && tgt) {
-                        src.neighbors.push(tgt);
-                        tgt.neighbors.push(src);
-                    }
-                });
-                // Force ForceGraph to ingest the updated dataset (includes nodes outside initial view)
-                Graph.graphData({
-                    nodes: graphData.nodes,
-                    links: graphData.links
-                });
-
-                Graph.nodeCanvasObject(Graph.nodeCanvasObject());
-                
-                citationData = data.citations || [];
-                document.getElementById('answer-text').innerHTML = formatAnswerWithCitations(data.answer, citationData);
-                
-                if (citationData.length > 0) {
-                    document.getElementById('citations-section').style.display = 'block';
-                    document.getElementById('citations-list').innerHTML = citationData.slice(0, 5).map(c => 
-                        `<div>[${c.index}] ${c.preview}</div>`
-                    ).join('');
-                }
-                
-                if (traversalNodes.size > 0) {
-                    document.getElementById('traversal-stats').style.display = 'block';
-                    document.getElementById('nodes-visited').innerText = traversalNodes.size;
-                    document.getElementById('edges-traversed').innerText = traversalLinks.size;
-                }
-                
-                setStatus('ready', 'Done');
-                setupCitationHover();
-                
-            } catch (err) {
-                console.error(err);
-                setStatus('error', err.message);
-                document.getElementById('answer-text').innerText = 'Error: ' + err.message;
-            }
+        function updateChatboxRect() {
+            chatboxRect = chatbox.getBoundingClientRect();
         }
-        
-        function formatAnswerWithCitations(text, citations) {
-            if (!text) return '';
-            return text.replace(/\[(\d+)\]/g, (match, num) => {
-                const c = citations.find(cit => cit.index === parseInt(num));
-                return c ? `<span class="citation-ref" data-index="${num}">[${num}]</span>` : match;
-            });
-        }
-        
-        function setupCitationHover() {
-            const tooltip = document.getElementById('citation-tooltip');
-            document.querySelectorAll('.citation-ref').forEach(el => {
-                el.addEventListener('mouseenter', e => {
-                    const idx = parseInt(el.dataset.index);
-                    const c = citationData.find(cit => cit.index === idx);
-                    if (c) {
-                        tooltip.innerText = c.full_content || c.preview;
-                        tooltip.style.left = e.pageX + 10 + 'px';
-                        tooltip.style.top = e.pageY - 20 + 'px';
-                        tooltip.style.display = 'block';
-                        
-                        if (c.node_ids && c.node_ids.length) {
-                             highlightNodes.clear();
-                             c.node_ids.forEach(nid => highlightNodes.add(nid));
-                             Graph.nodeCanvasObject(Graph.nodeCanvasObject());
-                             
-                             const node = nodesById[c.node_ids[0]];
-                             if (node) {
-                                 Graph.centerAt(node.x, node.y, 1000);
-                                 Graph.zoom(3, 2000);
-                             }
-                        }
-                    }
-                });
-                el.addEventListener('mouseleave', () => {
-                    tooltip.style.display = 'none';
-                    highlightNodes.clear();
-                    Graph.nodeCanvasObject(Graph.nodeCanvasObject());
-                });
+
+        function repelGraphFromChatbox() {
+            if (!Graph || !chatboxRect) return;
+            const padding = 18;
+            const bounds = {
+                left: chatboxRect.left - padding,
+                right: chatboxRect.right + padding,
+                top: chatboxRect.top - padding,
+                bottom: chatboxRect.bottom + padding
+            };
+
+            const chatCenter = {
+                x: chatboxRect.left + chatboxRect.width / 2,
+                y: chatboxRect.top + chatboxRect.height / 2
+            };
+            const centerGraph = Graph.screen2GraphCoords(chatCenter.x, chatCenter.y);
+            if (!centerGraph) return;
+
+            graphData.nodes.forEach(node => {
+                const coords = Graph.graph2ScreenCoords(node.x, node.y);
+                if (!coords) return;
+                if (
+                    coords.x >= bounds.left && coords.x <= bounds.right &&
+                    coords.y >= bounds.top && coords.y <= bounds.bottom
+                ) {
+                    const dx = node.x - centerGraph.x;
+                    const dy = node.y - centerGraph.y;
+                    const dist = Math.max(Math.hypot(dx, dy), 1);
+                    const strength = 0.5;
+                    node.vx += (dx / dist) * strength;
+                    node.vy += (dy / dist) * strength;
+                }
             });
         }
 
-        function setStatus(state, msg) {
-            document.getElementById('status-text').innerText = msg;
-            document.getElementById('status-text').style.color = state === 'error' ? 'red' : (state === 'pending' ? 'yellow' : '#666');
+        function enableDragging() {
+            const dragHandle = chatbox.querySelector('.chat-header');
+            let pointerId = null;
+            let offsetX = 0;
+            let offsetY = 0;
+
+            const onPointerMove = e => {
+                if (pointerId === null || e.pointerId !== pointerId) return;
+                const nextLeft = clamp(e.clientX - offsetX, 10, window.innerWidth - chatbox.offsetWidth - 10);
+                const nextTop = clamp(e.clientY - offsetY, 10, window.innerHeight - chatbox.offsetHeight - 10);
+                chatbox.style.left = `${nextLeft}px`;
+                chatbox.style.top = `${nextTop}px`;
+                updateChatboxRect();
+            };
+
+            const endDrag = e => {
+                if (pointerId === null || (e && e.pointerId !== pointerId)) return;
+                dragHandle.releasePointerCapture(pointerId);
+                pointerId = null;
+                chatbox.classList.remove('dragging');
+                updateChatboxRect();
+            };
+
+            dragHandle.addEventListener('pointerdown', e => {
+                pointerId = e.pointerId;
+                offsetX = e.clientX - chatbox.offsetLeft;
+                offsetY = e.clientY - chatbox.offsetTop;
+                chatbox.classList.add('dragging');
+                dragHandle.setPointerCapture(pointerId);
+            });
+
+            dragHandle.addEventListener('pointermove', onPointerMove);
+            dragHandle.addEventListener('pointerup', endDrag);
+            dragHandle.addEventListener('pointercancel', endDrag);
+            dragHandle.addEventListener('pointerleave', endDrag);
+
+            new ResizeObserver(() => updateChatboxRect()).observe(chatbox);
         }
 
+        promptInput.addEventListener('keydown', handlePromptSubmit);
         window.addEventListener('resize', () => {
+            if (!chatboxRect) return;
+            chatbox.style.left = `${clamp(chatbox.offsetLeft, 10, window.innerWidth - chatbox.offsetWidth - 10)}px`;
+            chatbox.style.top = `${clamp(chatbox.offsetTop, 10, window.innerHeight - chatbox.offsetHeight - 10)}px`;
             if (Graph) Graph.width(window.innerWidth).height(window.innerHeight);
+            updateChatboxRect();
         });
 
-        document.getElementById('query-input').addEventListener('keydown', e => {
-            if (e.key === 'Enter') runQuery();
+        chatbox.addEventListener('click', () => focusPrompt());
+        window.addEventListener('keydown', e => {
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            if (promptInput.disabled) return;
+            if (document.activeElement !== promptInput) focusPrompt();
         });
 
+        enableDragging();
+        updateChatboxRect();
         initGraph();
         loadGraph();
     })();
