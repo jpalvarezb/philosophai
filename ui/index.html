@@ -490,10 +490,17 @@
         function bootSequence() {
             disablePrompt();
             const thinker = startThinkingLine();
-            setTimeout(() => {
-                thinker.complete('Greetings. Ready.');
-                enablePrompt();
-            }, 2000);
+            fetch(`${API_BASE}/api/agent/greeting`)
+                .then(res => res.ok ? res.json() : Promise.reject(new Error('greeting failed')))
+                .then(data => {
+                    thinker.complete(data.greeting || 'Phil ready—ask me about thinkers or concepts.');
+                })
+                .catch(() => {
+                    thinker.complete('Phil ready—ask me about thinkers or concepts.');
+                })
+                .finally(() => {
+                    enablePrompt();
+                });
         }
 
         function handlePromptSubmit(e) {
