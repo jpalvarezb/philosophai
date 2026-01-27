@@ -337,6 +337,7 @@ def create_app() -> FastAPI:
 
         return {"nodes": nodes, "links": links}
 
+
     # Communities endpoint
     @app.get("/api/communities")
     async def get_communities():

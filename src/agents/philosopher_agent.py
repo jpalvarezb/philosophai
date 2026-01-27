@@ -1160,7 +1160,7 @@ class PhilosopherAgent:
                     },
                     {"role": "user", "content": question[:500]},
                 ],
-                max_tokens=80,
+                max_tokens=200,
                 temperature=0.3,
             )
             return (resp.choices[0].message.content or fallback).strip()
