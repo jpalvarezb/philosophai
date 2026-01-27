@@ -1812,10 +1812,15 @@
                 if (!byId.has(sid)) addNode(sid);
                 if (!byId.has(tid)) addNode(tid);
 
+                const isBase = assumeBase ? true : !!l.isBase;
+                const isDynamic = assumeBase ? false : (l._dynamic ?? false);
+
                 links.push({
                     ...l,
                     source: sid,
                     target: tid,
+                    isBase,
+                    _dynamic: isDynamic,
                 });
             });
 
