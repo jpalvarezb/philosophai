@@ -5,14 +5,43 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PhilosophAI - Knowledge Graph RAG</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
         :root { color-scheme: dark; }
         * { box-sizing: border-box; }
+        /* Vintage pixel cursors */
+        :root {
+
         body {
             margin: 0;
             overflow: hidden;
             background-color: #000;
             color: #fff;
-            font-family: 'Courier New', Courier, monospace;
+            font-family: 'VT323', monospace;
+            font-size: 18px;
+            letter-spacing: 0;
+            image-rendering: pixelated;
+            -webkit-font-smoothing: none;
+            -moz-osx-font-smoothing: grayscale;
+            cursor: var(--cursor-arrow);
+        }
+        a, button, [role="button"], .citation-ref {
+            cursor: pointer;
+        }
+
+        #chatbox, #graph-container, canvas, .chat-header {
+            cursor: default;
+        }
+
+        #chatbox.dragging {
+            cursor: grabbing;
+        }
+
+        input, textarea, [contenteditable="true"] {
+            cursor: text;
+        }
+
+        body.waiting, body.waiting * {
+            cursor: wait !important;
         }
 
         #graph-container {
@@ -21,13 +50,17 @@
             z-index: 1;
         }
 
+        #graph-container canvas {
+            image-rendering: pixelated;
+        }
+
         #chatbox {
             position: absolute;
             top: 60px;
             left: 40px;
             width: min(460px, 90vw);
             background: #000;
-            border: 1px solid #fff;
+            border: 2px solid #fff;
             border-radius: 0;
             box-shadow: none;
             display: flex;
@@ -45,7 +78,7 @@
         .chat-header {
             padding: 8px 12px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-            font-size: 12px;
+            font-size: 10px;
             letter-spacing: 0.08em;
             text-transform: none;
             color: #fff;
@@ -55,19 +88,29 @@
             user-select: none;
         }
 
+        .chat-header span:first-child {
+            font-family: 'Press Start 2P', monospace;
+            font-size: 10px;
+            font-weight: normal;
+            letter-spacing: 0;
+        }
+
         .chat-header span:last-child {
             color: rgba(255, 255, 255, 0.4);
-            font-size: 11px;
+            font-size: 14px;
             letter-spacing: 0.06em;
+            font-weight: normal;
+            font-family: 'VT323', monospace;
         }
 
         #chat-log {
             max-height: 60vh;
-            padding: 14px 16px 0 16px;
+            padding: 14px 16px 20px 16px;
             overflow-y: auto;
             font-size: 14px;
             scrollbar-width: thin;
             scrollbar-color: #fff transparent;
+            image-rendering: pixelated;
         }
 
         #chat-log::-webkit-scrollbar { width: 6px; }
@@ -79,9 +122,13 @@
         .chat-line {
             display: flex;
             gap: 12px;
-            margin-bottom: 2px;
+            margin-bottom: 4px;
             align-items: flex-start;
-            line-height: 1.5;
+            line-height: 1.2;
+            font-family: 'VT323', monospace;
+            font-size: 18px;
+        }
+            letter-spacing: 0;
         }
 
         .chat-line:last-child {
@@ -91,6 +138,9 @@
         .chat-line .prompt-symbol {
             color: #fff;
             flex-shrink: 0;
+            font-size: 18px;
+            font-weight: normal;
+            letter-spacing: 0;
         }
 
         .chat-line.user .prompt-symbol,
@@ -113,27 +163,70 @@
             gap: 12px;
             padding: 0 16px 10px 16px;
             background: #000;
-            margin-top: -2px;
-            font-size: 14px;
-            line-height: 1.45;
+            margin-top: -4px;
+            font-size: 18px;
+            line-height: 1.2;
+            font-family: 'VT323', monospace;
+        }
+            letter-spacing: 0;
         }
 
         #prompt-row .prompt-symbol {
             color: #fff;
             font-weight: normal;
-            line-height: 1.45;
+            line-height: 1.2;
+            font-size: 18px;
+            letter-spacing: 0;
         }
 
         #prompt-input {
-            flex: 1;
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            color: transparent;
             background: transparent;
             border: none;
-            color: #fff;
-            font: inherit;
             outline: none;
-            caret-color: #fff;
-            line-height: 1.45;
+            caret-color: transparent;
+            font: inherit;
             padding: 0;
+            margin: 0;
+            z-index: 10;
+        }
+
+        #prompt-display {
+            flex: 1;
+            white-space: pre;
+            overflow: hidden;
+            pointer-events: none;
+            font: inherit;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            min-height: 1.2em;
+        }
+
+        .retro-caret {
+            display: inline-block;
+            width: 3px;
+            height: 1em;
+            background-color: #fff;
+            animation: blink 1s step-end infinite;
+            vertical-align: -2px;
+        }
+
+        #prompt-row:not(:focus-within) .retro-caret {
+            animation: none;
+            opacity: 0.5; /* Dim or hide when not focused? */
+            background-color: transparent;
+            border: 1px solid #fff; /* Hollow block when inactive */
+            color: #fff;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
         }
 
         #prompt-input::placeholder {
@@ -156,12 +249,14 @@
             display: none;
             z-index: 100;
             pointer-events: none;
+            image-rendering: pixelated;
+            -webkit-font-smoothing: none;
         }
 
         .citation-ref {
-            color: #fff;
+            color: #00ff8a;
             cursor: pointer;
-            font-weight: bold;
+            font-weight: normal;
         }
         .citation-ref:hover { text-decoration: underline; }
 
@@ -175,7 +270,11 @@
             background: #000;
             z-index: 200;
             color: #00ff8a;
-            letter-spacing: 0.2em;
+            letter-spacing: 0.1em;
+            font-family: 'VT323', monospace;
+            font-size: 14px;
+            letter-spacing: 0.04em;
+            image-rendering: pixelated;
         }
 
         .spinner {
@@ -207,7 +306,10 @@
         <div id="chat-log" aria-live="polite"></div>
         <div id="prompt-row">
             <span class="prompt-symbol">&gt;</span>
-            <input id="prompt-input" type="text" placeholder="" autocomplete="off" spellcheck="false" disabled>
+            <div style="position: relative; flex: 1; display: flex; align-items: center; overflow: hidden;">
+                <div id="prompt-display"></div>
+                <input id="prompt-input" type="text" placeholder="" autocomplete="off" spellcheck="false" disabled>
+            </div>
         </div>
     </div>
 
@@ -233,6 +335,7 @@
         const chatbox = document.getElementById('chatbox');
         const chatLog = document.getElementById('chat-log');
         const promptInput = document.getElementById('prompt-input');
+        const promptDisplay = document.getElementById('prompt-display');
         const promptRow = document.getElementById('prompt-row');
 
         const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -333,6 +436,30 @@
             return out;
         }
 
+        function updatePromptDisplay() {
+            const val = promptInput.value;
+            const start = promptInput.selectionStart;
+            const end = promptInput.selectionEnd;
+            
+            // Handle simple case: insertion caret
+            let html = '';
+            if (start === end) {
+                const before = val.substring(0, start);
+                const after = val.substring(start);
+                html = escapeHtml(before) + '<span class="retro-caret"></span>' + escapeHtml(after);
+            } else {
+                // Selection range (optional: could highlight background)
+                const before = val.substring(0, start);
+                const sel = val.substring(start, end);
+                const after = val.substring(end);
+                html = escapeHtml(before) + `<span style="background:#fff;color:#000">${escapeHtml(sel)}</span>` + escapeHtml(after);
+            }
+            promptDisplay.innerHTML = html;
+            
+            // Sync scroll
+            promptDisplay.scrollLeft = promptInput.scrollLeft;
+        }
+
         function focusPrompt() {
             promptInput.focus({ preventScroll: true });
         }
@@ -350,11 +477,14 @@
             promptInput.placeholder = '';
             setPromptVisible(true);
             focusPrompt();
+            updatePromptDisplay();
+            document.body.classList.remove('waiting');
         }
 
         function disablePrompt() {
             promptInput.disabled = true;
             setPromptVisible(false);
+            document.body.classList.add('waiting');
         }
 
         function bootSequence() {
@@ -395,7 +525,7 @@
                 const res = await fetch(`${API_BASE}/api/agent/query`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question, max_iterations: 25, verbose: false })
+                    body: JSON.stringify({ question, max_iterations: 25, verbose: false, require_traversal: true, min_hops: 1 })
                 });
 
                 if (!res.ok) throw new Error('Query failed');
@@ -409,9 +539,11 @@
                 thinker.complete(formattedAnswer, { trusted: true });
                 setupCitationHover();
 
-                if (traversalNodes.size > 0) {
-                    appendLine('system', `Traversal ${traversalNodes.size} nodes // ${traversalLinks.size} edges`);
-                }
+                // if (traversalNodes.size > 0) {
+                //     const edgeCount = Array.isArray(data.traversal?.edges) ? data.traversal.edges.length : traversalLinks.size;
+                //     const suffix = edgeCount > 0 ? ` // ${edgeCount} edges` : '';
+                //     appendLine('system', `Traversal ${traversalNodes.size} nodes${suffix}`);
+                // }
             } catch (err) {
                 thinker.complete(`Error: ${err.message}`);
             } finally {
@@ -629,61 +761,100 @@
                 .width(window.innerWidth)
                 .height(window.innerHeight)
                 .nodeCanvasObject((node, ctx, globalScale) => {
+                    ctx.imageSmoothingEnabled = false;
+                    const pixelSize = 2; 
+                    const snap = v => Math.round(v / pixelSize) * pixelSize;
+                    const x = snap(node.x);
+                    const y = snap(node.y);
+
+                    // Radius based on value
+                    const rRaw = Math.max(8, 8 + Math.sqrt(node.val || 0));
+                    const r = Math.round(rRaw / pixelSize) * pixelSize;
+                    
                     const label = node.label || node.id;
-                    const fontSize = 12 / globalScale;
-                    ctx.font = `${fontSize}px "Courier New", monospace`;
-
-                    const r = 4 + Math.sqrt(node.val || 0);
-
-                    ctx.beginPath();
-                    ctx.arc(node.x, node.y, r, 0, 2 * Math.PI, false);
-                    ctx.fillStyle = '#000';
-                    ctx.fill();
+                    const baseFont = Math.max(9, Math.min(18, r * 2.5));
+                    const fontSize = baseFont / globalScale;
+                    ctx.font = `${fontSize}px "VT323", monospace`;
 
                     const isActive = highlightNodes.has(node.id) || traversalNodes.has(node.id);
-                    ctx.strokeStyle = isActive ? '#00ff8a' : '#ffffff';
-                    ctx.lineWidth = isActive ? 2 / globalScale : 1 / globalScale;
-                    ctx.stroke();
+                    const strokeColor = isActive ? '#00ff8a' : '#ffffff';
+
+                    // Octagon Logic: intersection of box and rotated box (sum of abs)
+                    // box: max(|dx|, |dy|) <= r
+                    // diamond: |dx| + |dy| <= r * 1.4
+                    const limit = r * 1.4;
+                    const innerR = Math.max(0, r - pixelSize); 
+                    const innerLimit = innerR * 1.4;
+
+                    for (let ix = -r; ix <= r; ix += pixelSize) {
+                        for (let iy = -r; iy <= r; iy += pixelSize) {
+                            const adx = Math.abs(ix);
+                            const ady = Math.abs(iy);
+                            const sum = adx + ady;
+
+                            if (sum <= limit) {
+                                // It's inside the outer octagon
+                                if (adx <= innerR && ady <= innerR && sum <= innerLimit) {
+                                    // Inside inner octagon -> Fill Black
+                                    ctx.fillStyle = '#000';
+                                    ctx.fillRect(x + ix, y + iy, pixelSize, pixelSize);
+                                } else {
+                                    // Border -> Fill White/Green
+                                    ctx.fillStyle = strokeColor;
+                                    ctx.fillRect(x + ix, y + iy, pixelSize, pixelSize);
+                                }
+                            }
+                        }
+                    }
 
                     if (globalScale > 0.8 || isActive || node.val > 10) {
-                        ctx.fillStyle = '#ffffff';
+                        ctx.fillStyle = isActive ? '#00ff8a' : '#ffffff';
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
-                        ctx.fillText(label, node.x, node.y);
+                        ctx.fillText(label, x, y);
                     }
                 })
                 .linkCanvasObject((link, ctx, globalScale) => {
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.lineCap = 'square';
+                    ctx.lineJoin = 'miter';
+                    const snap = v => Math.round(v);
                     const start = link.source;
                     const end = link.target;
                     if (typeof start !== 'object' || typeof end !== 'object') return;
 
                     const curvature = 0.2;
-                    const dx = end.x - start.x;
-                    const dy = end.y - start.y;
+                    const sx = snap(start.x);
+                    const sy = snap(start.y);
+                    const ex = snap(end.x);
+                    const ey = snap(end.y);
+                    const dx = ex - sx;
+                    const dy = ey - sy;
                     const dist = Math.sqrt(dx * dx + dy * dy);
                     if (dist === 0) return;
-
-                    const midX = (start.x + end.x) / 2;
-                    const midY = (start.y + end.y) / 2;
+                    const midX = (sx + ex) / 2;
+                    const midY = (sy + ey) / 2;
                     const nx = -dy / dist;
                     const ny = dx / dist;
-                    const cpX = midX + nx * dist * curvature;
-                    const cpY = midY + ny * dist * curvature;
+                    const cpX = snap(midX + nx * dist * curvature);
+                    const cpY = snap(midY + ny * dist * curvature);
 
                     const isTraversal = traversalLinks.has(`${start.id}-${end.id}`) || traversalLinks.has(`${end.id}-${start.id}`);
+                    const isHighlight = highlightNodes.has(start.id) && highlightNodes.has(end.id);
+                    const isActive = isTraversal || isHighlight;
 
                     ctx.beginPath();
-                    ctx.moveTo(start.x, start.y);
-                    ctx.quadraticCurveTo(cpX, cpY, end.x, end.y);
-                    ctx.strokeStyle = isTraversal ? '#00ff8a' : 'rgba(255, 255, 255, 0.4)';
-                    ctx.lineWidth = (isTraversal ? 2 : 0.5) / globalScale;
+                    ctx.moveTo(sx, sy);
+                    ctx.quadraticCurveTo(cpX, cpY, ex, ey);
+                    ctx.strokeStyle = isActive ? '#00ff8a' : 'rgba(255, 255, 255, 0.4)';
+                    ctx.lineWidth = (isActive ? 2 : 0.5) / globalScale;
                     ctx.stroke();
 
                     const label = link.label || link.type;
-                    if (label && globalScale > 1.2) {
+                    if (label && (globalScale > 1.2 || isActive)) {
                         const t = 0.5;
-                        const bx = (1 - t) * (1 - t) * start.x + 2 * (1 - t) * t * cpX + t * t * end.x;
-                        const by = (1 - t) * (1 - t) * start.y + 2 * (1 - t) * t * cpY + t * t * end.y;
+                        const bx = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cpX + t * t * ex;
+                        const by = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cpY + t * t * ey;
                         const angle = Math.atan2(dy, dx);
 
                         ctx.save();
@@ -691,10 +862,11 @@
                         ctx.rotate(angle);
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'bottom';
-                        ctx.fillStyle = isTraversal ? '#00ff8a' : '#ffffff';
-                        const fontSize = 8 / globalScale;
-                        ctx.font = `${fontSize}px "Courier New", monospace`;
-                        ctx.fillText(label, 0, -2 / globalScale);
+                        ctx.fillStyle = isActive ? '#00ff8a' : '#ffffff';
+                        // Scale label with graph (fixed graph units) so it grows when zooming in
+                        const fontSize = 3;
+                        ctx.font = `${fontSize}px "VT323", monospace`;
+                        ctx.fillText(label, 0, -3);
                         ctx.restore();
                     }
                 })
@@ -907,6 +1079,11 @@
         }
 
         promptInput.addEventListener('keydown', handlePromptSubmit);
+        // Sync display on input interactions
+        ['input', 'keydown', 'keyup', 'click', 'select', 'focus', 'blur'].forEach(evt => {
+            promptInput.addEventListener(evt, () => requestAnimationFrame(updatePromptDisplay));
+        });
+
         window.addEventListener('resize', () => {
             if (!chatboxRect) return;
             chatbox.style.left = `${clamp(chatbox.offsetLeft, 10, window.innerWidth - chatbox.offsetWidth - 10)}px`;
@@ -923,9 +1100,14 @@
         });
 
         enableDragging();
-        updateChatboxRect();
-        initGraph();
-        loadGraph();
+        try {
+            updateChatboxRect();
+            initGraph();
+            loadGraph();
+        } catch (err) {
+            console.error(err);
+            document.getElementById('loading-text').innerText = 'System Error: ' + err.message;
+        }
     })();
     </script>
 </body>
