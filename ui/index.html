@@ -1223,7 +1223,7 @@
                 pointerId = null;
                 chatbox.classList.remove('dragging');
                 updateChatboxRect();
-                if (Graph) Graph.d3AlphaTarget(0); // Cooldown
+                // No explicit cooldown needed; force-graph handles cooling down internally.
             };
 
             dragHandle.addEventListener('pointerdown', e => {
@@ -1244,7 +1244,7 @@
                 
                 chatbox.classList.add('dragging');
                 dragHandle.setPointerCapture(pointerId);
-                if (Graph) Graph.d3AlphaTarget(0.3).restart(); // Wake up
+                if (Graph && typeof Graph.d3ReheatSimulation === 'function') Graph.d3ReheatSimulation(); // Wake up
             });
 
             dragHandle.addEventListener('pointermove', onPointerMove);
