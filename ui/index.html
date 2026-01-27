@@ -60,7 +60,7 @@
             left: 40px;
             width: min(460px, 90vw);
             background: #000;
-            border: 2px solid #fff;
+            border: 4px solid #fff;
             border-radius: 0;
             box-shadow: none;
             display: flex;
@@ -772,6 +772,7 @@
                 .width(window.innerWidth)
                 .height(window.innerHeight)
                 .nodeCanvasObject((node, ctx, globalScale) => {
+                    ctx.globalAlpha = 1.0;
                     ctx.imageSmoothingEnabled = false;
                     const pixelSize = 2; 
                     const snap = v => Math.round(v / pixelSize) * pixelSize;
@@ -796,6 +797,24 @@
                     const limit = r * 1.4;
                     const innerR = Math.max(0, r - pixelSize); 
                     const innerLimit = innerR * 1.4;
+
+                    // Solid fill to ensure opacity (prevents sub-pixel translucency artifacts)
+                    ctx.fillStyle = '#000000';
+                    if (innerR > 0) {
+                        const A = innerR;
+                        const B = Math.max(0, innerLimit - innerR);
+                        ctx.beginPath();
+                        ctx.moveTo(x + A, y + B);
+                        ctx.lineTo(x + B, y + A);
+                        ctx.lineTo(x - B, y + A);
+                        ctx.lineTo(x - A, y + B);
+                        ctx.lineTo(x - A, y - B);
+                        ctx.lineTo(x - B, y - A);
+                        ctx.lineTo(x + B, y - A);
+                        ctx.lineTo(x + A, y - B);
+                        ctx.closePath();
+                        ctx.fill();
+                    }
 
                     for (let ix = -r; ix <= r; ix += pixelSize) {
                         for (let iy = -r; iy <= r; iy += pixelSize) {
