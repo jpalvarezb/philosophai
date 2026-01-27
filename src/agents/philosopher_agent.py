@@ -316,10 +316,12 @@ SCOPE & INDUCED SUBGRAPH
 - scoped_edges = edges supported by scoped chunks; induced nodes = V(scoped_edges).
 - Only edges in scoped_edges are “in scope”; node_in_scope false means dead end under current scope.
 
-CITATIONS
+CITATIONS (AGGRESSIVE)
 - Cite only chunks you actually read via get_chunk_content.
 - Use [1], [2], ... in answer text; order matches cited_chunk_ids.
-- Weave citations inside sentences; never add a standalone \"Sources\" or \"References\" section.
+- Cite every substantive factual claim or attribution; when in doubt, cite.
+- It is OK to place multiple citations in one sentence; do not leave uncited factual assertions.
+- Weave citations inside sentences; never add a standalone "Sources" or "References" section.
 
 OUTPUT
 - Inline citations only; no bullet lists of sources and no trailing source sections.
@@ -817,17 +819,22 @@ class PhilosopherAgent:
             return "\n".join(lines)
 
         elif name == "advance_to_synthesis":
-            if self._current_phase in (Phase.RETRIEVAL, Phase.TRAVERSAL):
-                # Ensure we have actively traversed new edges this turn
-                if self._new_edges_count < 2 and self._collected_entities:
-                    return "Traversal too shallow—expand_node along at least two NEW promising edges before synthesis."
-                # Ensure we have read evidence this turn (prevents generic, ungrounded repeats)
-                if not self._read_chunk_ids_this_turn:
-                    return "No new evidence read yet—call get_chunk_content on the most relevant chunks before synthesis."
-                self._advance_phase(Phase.SYNTHESIS)
-                return "Advanced to synthesis phase. Now call synthesize_answer with your response."
-            else:
-                return f"Cannot advance to synthesis from {self._current_phase.value} phase."
+            if self._current_phase != Phase.TRAVERSAL:
+                return (
+                    "Traversal required—enter traversal phase and call expand_node before synthesis. "
+                    "If needed, get_entities_from_chunks and then advance_to_traversal."
+                )
+            # Ensure traversal has actually started this turn
+            if not self._traversal_history:
+                return "Traversal not started—call expand_node to begin."
+            # Ensure we have actively traversed new edges this turn
+            if self._new_edges_count < 2:
+                return "Traversal too shallow—expand_node along at least two NEW promising edges before synthesis."
+            # Ensure we have read evidence this turn (prevents generic, ungrounded repeats)
+            if not self._read_chunk_ids_this_turn:
+                return "No new evidence read yet—call get_chunk_content on the most relevant chunks before synthesis."
+            self._advance_phase(Phase.SYNTHESIS)
+            return "Advanced to synthesis phase. Now call synthesize_answer with your response."
 
         elif name == "synthesize_answer":
             answer = arguments.get("answer", "")
