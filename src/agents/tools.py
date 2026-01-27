@@ -278,8 +278,8 @@ class AgentTools:
                     "score_breakdown": "|".join(score_breakdown),
                 })
             
-            # Sort: in-scope edges first, then by weight
-            neighbor_data.sort(key=lambda x: (-x["in_scope"], -x["weight"]))
+            # Sort: in-scope first, then traversal_score, then weight
+            neighbor_data.sort(key=lambda x: (-int(x["in_scope"]), -x.get("traversal_score", 0), -x.get("weight", 0)))
             neighbor_data = neighbor_data[:max_neighbors]
 
             # Check if this node itself is in the induced subgraph

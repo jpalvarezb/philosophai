@@ -10,6 +10,7 @@ from enum import Enum
 
 class Phase(str, Enum):
     """Query processing phases for state machine enforcement."""
+    GUARD = "guard"
     SCOPE = "scope"
     RETRIEVAL = "retrieval"
     TRAVERSAL = "traversal"
@@ -19,6 +20,12 @@ class Phase(str, Enum):
 
 # Phase-gated tool access
 PHASE_TOOLS = {
+    Phase.GUARD: {
+        "sequential_thinking",
+        "guard_relevance",
+        "skip_scope",
+        "skip_guard",
+    },
     Phase.SCOPE: {
         "sequential_thinking",
         "list_available_sources",

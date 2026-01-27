@@ -338,7 +338,9 @@ class MultiHopAgent:
             target_communities=traversal_communities,
             query=question,
             max_hops=max_hops,
-            max_nodes=50,
+            max_nodes=80,
+            beam_width=40,
+            max_collected_chunks=160,
             restrict_to_communities=bool(target_communities) and not is_strict_scope,  # Use community gating only if not strict scope
             scoped_chunks=scoped_chunks,  # Filter chunks at collection time
             scoped_edges=scoped_edges if is_strict_scope else None,  # STRICT: constrain edge traversal

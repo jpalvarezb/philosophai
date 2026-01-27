@@ -25,7 +25,7 @@ class ScopeRequest(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str
-    max_hops: int = 2
+    max_hops: int = 3
     max_context_chunks: int = 12
     use_community_routing: bool = True
     scope: ScopeRequest | None = None
@@ -68,6 +68,7 @@ class AppState:
         self.agent_tools = None
         self.citation_builder = None
         self.node_to_community = {}
+        self.openai_client = None
         self.ready = False
 
 
@@ -152,6 +153,7 @@ def init_components():
         llm_model="gpt-4o",
         verbose=False,
     )
+    state.openai_client = client
 
     # Share agent with WebSocket module
     set_agent(state.agent)
@@ -249,6 +251,16 @@ def create_app() -> FastAPI:
                 max_iterations=request.max_iterations,
             )
             return result
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Agentic greeting (LLM-generated)
+    @app.get("/api/agent/greeting")
+    async def agent_greeting():
+        if not state.ready or not state.philosopher_agent:
+            raise HTTPException(status_code=503, detail="Agent not initialized")
+        try:
+            return {"greeting": state.philosopher_agent.generate_greeting()}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 

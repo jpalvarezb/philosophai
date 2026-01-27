@@ -49,6 +49,28 @@ other tool calls to document your reasoning.""",
     {
         "type": "function",
         "function": {
+            "name": "guard_relevance",
+            "description": "Decide if the query fits Phil's domain (philosophy/theology/history/culture). Return a short verdict; if out-of-domain, tell the user to ask within scope.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Original user question"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "skip_guard",
+            "description": "Bypass guard when you are certain the query is in-domain.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_community_reports",
             "description": "Search community report summaries to route broad/unscoped queries into relevant communities. Returns community_ids, scores, and cited_chunk_ids.",
             "parameters": {
@@ -232,7 +254,7 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
 ]
 
 
-SYSTEM_PROMPT = """You are **Fylo**, a scholarly knowledge agent for philosophy, theology, history, and culture.
+SYSTEM_PROMPT = """You are **Phil**, a scholarly knowledge agent for philosophy, theology, history, and culture.
 You reason rigorously, cite evidence, and traverse a knowledge graph of concepts, authors, works, and ideas.
 
 SAFETY & ETHICS (CRITICAL)
@@ -241,6 +263,8 @@ SAFETY & ETHICS (CRITICAL)
 - Never encourage harmful, illegal, or self-destructive actions. Keep a neutral, academic tone.
 
 WORKFLOW (phase-gated)
+0) GUARD
+   - Call guard_relevance(query) first. If out-of-domain, stop with a brief redirection. If in-domain, proceed to scope.
 1) SCOPE (must be first)
    - Specific author/text/tradition -> set_scope
    - Broad/comparative/open-ended -> skip_scope
@@ -278,6 +302,14 @@ SCOPE & INDUCED SUBGRAPH
 CITATIONS
 - Cite only chunks you actually read via get_chunk_content.
 - Use [1], [2], ... in answer text; order matches cited_chunk_ids.
+- Weave citations inside sentences; never add a standalone \"Sources\" or \"References\" section.
+
+OUTPUT
+- Inline citations only; no bullet lists of sources and no trailing source sections.
+
+TRAVERSAL INTENSITY
+- Before synthesis, expand at least two promising edges when evidence exists; explore multiple communities if scores are close.
+- Backtrack when a path stalls; do not stop after a single hop unless the question is trivial or clearly irrelevant.
 
 STYLE
 - Scholarly, precise, high information density. Present multiple viewpoints when relevant. State uncertainty.
@@ -310,7 +342,7 @@ class PhilosopherAgent:
         self.verbose = verbose
         
         # State managed per-query
-        self._current_phase = Phase.SCOPE
+        self._current_phase = Phase.GUARD
         self._scope = None
         self._collected_chunks: list[str] = []
         self._collected_entities: list[str] = []
@@ -325,7 +357,7 @@ class PhilosopherAgent:
     
     def _reset_state(self):
         """Reset state for a new query."""
-        self._current_phase = Phase.SCOPE
+        self._current_phase = Phase.GUARD
         self._scope = None
         self._collected_chunks = []
         self._collected_entities = []
@@ -339,12 +371,40 @@ class PhilosopherAgent:
         self._current_node = None
         # Clear any active scope from previous query
         self.agent_tools.clear_active_scope()
+
+    def generate_greeting(self) -> str:
+        """Short, varied self-intro inviting the user to ask a question."""
+        if not self.llm_client:
+            return "Phil online—I'll walk the graph, cite inline. What should we explore?"
+        system_msg = SYSTEM_PROMPT + (
+            "\n\nGREET QUICKLY:\n"
+            "- Output exactly one sentence, under 22 words.\n"
+            "- Introduce yourself as Phil and mention your specialties\n"
+            "- End by inviting the user's question.\n"
+            "- No citations, markdown, bullets, or lists."
+        )
+        try:
+            resp = self.llm_client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": "Give the greeting now."},
+                ],
+                temperature=0.4,
+                max_tokens=60,
+            )
+            text = resp.choices[0].message.content.strip()
+            return text[:200]
+        except Exception:
+            return "Phil here—graph-walking with inline citations. What topic do you want to probe?"
     
     def _check_phase(self, tool_name: str) -> str | None:
         """Check if tool is allowed in current phase. Returns error message if not."""
         allowed = PHASE_TOOLS.get(self._current_phase, set())
         # Map tool names to phase tool names
         tool_mapping = {
+            "guard_relevance": "guard_relevance",
+            "skip_guard": "skip_guard",
             "sequential_thinking": "sequential_thinking",
             "list_available_sources": "list_available_sources",
             "set_scope": "set_scope",
@@ -372,6 +432,7 @@ class PhilosopherAgent:
     def _advance_phase(self, to_phase: Phase) -> str:
         """Advance to the next phase."""
         valid_transitions = {
+            Phase.GUARD: {Phase.SCOPE},
             Phase.SCOPE: {Phase.RETRIEVAL},
             Phase.RETRIEVAL: {Phase.TRAVERSAL, Phase.SYNTHESIS},
             Phase.TRAVERSAL: {Phase.SYNTHESIS},
@@ -399,6 +460,25 @@ class PhilosopherAgent:
             result = self.agent_tools.sequential_thinking(**arguments)
             self._thoughts.append(result.data)
             return result.message
+
+        elif name == "guard_relevance":
+            q = arguments.get("query", "")
+            if self._is_irrelevant_query(q):
+                self._final_answer = self._llm_guard_response(q)
+                self._current_phase = Phase.DONE
+                return self._final_answer
+            if self.llm_client:
+                verdict = self._llm_guard_check(q)
+                if verdict == "out":
+                    self._final_answer = self._llm_guard_response(q)
+                    self._current_phase = Phase.DONE
+                    return self._final_answer
+            self._advance_phase(Phase.SCOPE)
+            return "Query is in-domain. Proceeding to scope."
+
+        elif name == "skip_guard":
+            self._advance_phase(Phase.SCOPE)
+            return "Guard skipped. Proceeding to scope."
         
         elif name == "read_community_summary":
             result = self.agent_tools.read_community_summary(
@@ -680,6 +760,8 @@ class PhilosopherAgent:
         
         elif name == "advance_to_synthesis":
             if self._current_phase in (Phase.RETRIEVAL, Phase.TRAVERSAL):
+                if len(self._traversed_edges) < 2 and self._collected_entities:
+                    return "Traversal too shallow—expand_node along at least two promising edges before synthesis."
                 self._advance_phase(Phase.SYNTHESIS)
                 return "Advanced to synthesis phase. Now call synthesize_answer with your response."
             else:
@@ -720,6 +802,10 @@ class PhilosopherAgent:
         Returns:
             Dict with answer, citations, and reasoning trace
         """
+        normalized_question = question.strip()
+        if self._is_irrelevant_query(normalized_question):
+            self._reset_state()
+            return self._reject_irrelevant(normalized_question)
         self._reset_state()
         
         if not self.llm_client:
@@ -872,3 +958,98 @@ class PhilosopherAgent:
         
         on_event({"type": "complete", "message": "Query complete"})
         return result
+
+    def _is_irrelevant_query(self, question: str) -> bool:
+        """Heuristic guardrail for non-philosophy small talk or off-domain asks."""
+        q = question.lower().strip()
+        greetings = {"hi", "hello", "hey", "yo", "sup", "hola", "what's up", "whats up"}
+        if q in greetings:
+            return True
+        trivial_prefixes = ("hey ", "hi ", "hello ", "yo ", "sup ")
+        if any(q.startswith(p) and len(q.split()) <= 3 for p in trivial_prefixes):
+            return True
+        off_domain_phrases = [
+            "buy me a car", "order me a pizza", "book me a flight", "rent a car",
+            "buy me", "price of a car", "i want a car", "want a car", "need a car",
+            "buy a car", "purchase a car", "rent a car", "lease a car",
+            "book a flight", "book flight", "plane ticket", "plane tickets",
+            "order pizza", "buy pizza"
+        ]
+        if any(p in q for p in off_domain_phrases):
+            return True
+        # Short commercial-intent queries with vehicle/booking terms
+        car_tokens = {"car", "cars", "auto", "vehicle"}
+        intent_tokens = {"buy", "purchase", "rent", "lease", "need", "want", "order", "book", "price"}
+        words = q.split()
+        if len(words) <= 8 and car_tokens & set(words) and intent_tokens & set(words):
+            return True
+        return False
+
+    def _reject_irrelevant(self, question: str) -> dict:
+        """Return a short guardrail response without invoking the LLM."""
+        message = "Phil focuses on philosophy, theology, history, and culture. Ask about ideas, thinkers, or texts."
+        return {
+            "answer": message,
+            "citations": [],
+            "phase": Phase.DONE.value,
+            "scope": None,
+            "collected_chunks": [],
+            "collected_entities": [],
+            "traversal": {"visited_nodes": [], "edges": [], "edges_traversed": 0},
+            "traversal_nodes": [],
+            "thoughts": [],
+            "iterations": 0,
+        }
+
+    def _llm_guard_check(self, question: str) -> str:
+        """
+        Ask the LLM to classify if the query is in Phil's domain.
+        Returns "in" or "out".
+        """
+        try:
+            resp = self.llm_client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Classify if the user query is within Phil's scope: philosophy, theology, history, culture.\n"
+                            "Respond with exactly one token: IN or OUT."
+                        ),
+                    },
+                    {"role": "user", "content": question[:500]},
+                ],
+                max_tokens=3,
+                temperature=0,
+            )
+            text = (resp.choices[0].message.content or "").strip().lower()
+            return "in" if "in" in text[:5] else "out"
+        except Exception:
+            return "in"
+
+    def _llm_guard_response(self, question: str) -> str:
+        """
+        LLM-crafted redirect when the query is out of scope.
+        Uses SYSTEM_PROMPT for persona consistency; keeps it to <=2 sentences.
+        """
+        fallback = "Phil focuses on philosophy, theology, history, and culture. Ask about ideas, thinkers, or texts."
+        if not self.llm_client:
+            return fallback
+        try:
+            resp = self.llm_client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": SYSTEM_PROMPT
+                        + "\n\nOUT-OF-SCOPE HANDOFF:\n"
+                        "Politely decline and redirect to topics in scope. One or two short sentences. No citations, no markdown."
+                    },
+                    {"role": "user", "content": question[:500]},
+                ],
+                max_tokens=80,
+                temperature=0.3,
+            )
+            return (resp.choices[0].message.content or fallback).strip()
+        except Exception:
+            return fallback
