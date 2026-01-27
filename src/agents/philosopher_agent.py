@@ -797,6 +797,26 @@ class PhilosopherAgent:
                         "content": "Please continue by calling the appropriate tool. Remember to use sequential_thinking to document your reasoning.",
                     })
         
+        # Build traversal node metadata for nodes seen during traversal/collection
+        traversal_node_ids = set(self._collected_entities)
+        for e in self._traversed_edges:
+            traversal_node_ids.add(e.get("source"))
+            traversal_node_ids.add(e.get("target"))
+        traversal_nodes_meta = []
+        if traversal_node_ids:
+            G = self.agent_tools.graph
+            community_map = self.agent_tools.node_to_community
+            for nid in traversal_node_ids:
+                if nid is None:
+                    continue
+                node_data = G.nodes.get(nid, {}) if G is not None and nid in G else {}
+                traversal_nodes_meta.append({
+                    "id": nid,
+                    "label": node_data.get("label", nid),
+                    "community": community_map.get(nid),
+                    "degree": G.degree(nid) if G is not None and nid in G else 0,
+                })
+
         # Build response
         citations_data = []
         if self._citations:
@@ -822,6 +842,7 @@ class PhilosopherAgent:
                 "edges": self._traversed_edges,
                 "edges_traversed": len(self._traversed_edges),
             },
+            "traversal_nodes": traversal_nodes_meta,
             "thoughts": self._thoughts,
             "iterations": iteration,
         }

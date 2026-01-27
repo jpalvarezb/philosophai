@@ -70,22 +70,45 @@ class AgentTools:
         self._induced_nodes = None
 
     def search_vectors(self, query: str, limit: int = 10) -> ToolResult:
-        """Search for relevant chunks via vector similarity, respecting active scope."""
+        """Search for relevant chunks via vector similarity, respecting active scope.
+
+        This tool only returns KG-grounded chunks (chunks that have at least one
+        triple in normalized_triples_clean_canon), so citations can map back to
+        node IDs for UI hover/traceability.
+        """
         try:
+            requested_limit = max(int(limit), 1)
+            # Over-fetch to avoid returning too few chunks after KG-grounding filter.
+            probe_limit = requested_limit * 5
+
             # Use scoped search if scope is active
             if self._scoped_text_ids:
                 chunk_ids, scores, _ = self.vector_search.search_chunks_only(
-                    query, limit=limit, text_ids=self._scoped_text_ids
+                    query, limit=probe_limit, text_ids=self._scoped_text_ids
                 )
             else:
-                chunk_ids, scores, _ = self.vector_search.search_chunks_only(query, limit=limit)
+                chunk_ids, scores, _ = self.vector_search.search_chunks_only(query, limit=probe_limit)
+
+            grounded = self.storage.get_chunk_ids_with_triples(chunk_ids)
+            filtered_chunk_ids = []
+            filtered_scores = []
+            for cid, score in zip(chunk_ids, scores):
+                if cid in grounded:
+                    filtered_chunk_ids.append(cid)
+                    filtered_scores.append(score)
+
+            # Trim back down to the requested limit
+            filtered_chunk_ids = filtered_chunk_ids[:requested_limit]
+            filtered_scores = filtered_scores[:requested_limit]
+
             return ToolResult(
                 tool_name="search_vectors",
                 success=True,
                 data={
-                    "chunk_ids": chunk_ids,
-                    "scores": scores,
+                    "chunk_ids": filtered_chunk_ids,
+                    "scores": filtered_scores,
                     "scoped": bool(self._scoped_text_ids),
+                    "kg_grounded": True,
                 },
             )
         except Exception as e:
@@ -102,6 +125,10 @@ class AgentTools:
 
         Use for UNSCOPED/global questions to route into the right communities before
         chunk-level search. When scope is active, cited chunks are pre-filtered by scope.
+
+        This tool only returns KG-grounded cited chunks (those with at least one
+        triple in normalized_triples_clean_canon) so downstream citations can map
+        back to node IDs.
         """
         try:
             result = self.vector_search.search_community_reports(
@@ -109,14 +136,20 @@ class AgentTools:
                 limit=limit,
                 text_ids=self._scoped_text_ids if self._scoped_text_ids else None,
             )
+
+            cited_chunk_ids = result.cited_chunk_ids
+            grounded = self.storage.get_chunk_ids_with_triples(cited_chunk_ids)
+            cited_chunk_ids = [cid for cid in cited_chunk_ids if cid in grounded]
+
             return ToolResult(
                 tool_name="search_community_reports",
                 success=True,
                 data={
                     "community_ids": result.community_ids,
                     "scores": result.scores,
-                    "cited_chunk_ids": result.cited_chunk_ids,
+                    "cited_chunk_ids": cited_chunk_ids,
                     "scoped": bool(self._scoped_text_ids),
+                    "kg_grounded": True,
                 },
             )
         except Exception as e:

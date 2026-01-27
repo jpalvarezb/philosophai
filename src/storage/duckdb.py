@@ -57,6 +57,28 @@ class DuckDBStorage:
             chunk_ids,
         ).fetchall()
 
+    def get_chunk_ids_with_triples(self, chunk_ids: list[str]) -> set[str]:
+        """Return the subset of chunk_ids that have at least one mapped KG triple.
+
+        A chunk is considered KG-grounded if it appears in normalized_triples_clean_canon.
+        This enables citations to map to node IDs via subject_canon_id/object_canon_id.
+        """
+        if not chunk_ids:
+            return set()
+
+        placeholders = ",".join(["?"] * len(chunk_ids))
+        sql = f"""
+            SELECT DISTINCT chunk_id
+            FROM normalized_triples_clean_canon
+            WHERE chunk_id IN ({placeholders})
+              AND (
+                (subject_canon_id IS NOT NULL AND subject_canon_id != '')
+                OR (object_canon_id IS NOT NULL AND object_canon_id != '')
+              )
+        """
+        results = self.con.execute(sql, chunk_ids).fetchall()
+        return {r[0] for r in results if r and r[0]}
+
     # -------------------------------------------------------------------------
     # Vector search
     # -------------------------------------------------------------------------

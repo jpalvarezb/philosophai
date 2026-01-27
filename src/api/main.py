@@ -254,28 +254,56 @@ def create_app() -> FastAPI:
 
     # Graph data for visualization
     @app.get("/api/graph")
-    async def get_graph_data(limit: int = 1000):
-        """Return graph nodes/edges for visualization."""
+    async def get_graph_data(
+        limit: int = 1000,
+        main_only: bool = True,
+    ):
+        """
+        Return graph nodes/edges for visualization.
+
+        - main_only=True (default): restrict to the largest connected component (main graph)
+        - limit: take the top-N highest-degree nodes within that component (or all if limit <= 0)
+        """
         if not state.ready:
             raise HTTPException(status_code=503, detail="Not initialized")
 
+        import networkx as nx
+
         G = state.graph_builder.graph
+
+        # Choose the subgraph (largest connected component when requested)
+        if main_only:
+            undirected = G.to_undirected()
+            try:
+                largest_nodes = max(nx.connected_components(undirected), key=len)
+            except ValueError:
+                largest_nodes = set()
+            H = G.subgraph(largest_nodes)
+        else:
+            H = G
+
+        # Degree-based ordering within the chosen subgraph
+        deg_map = dict(H.degree())
+        ordered = sorted(deg_map.items(), key=lambda x: x[1], reverse=True)
+        if limit > 0:
+            selected_nodes = [n for n, _ in ordered[:limit]]
+        else:
+            selected_nodes = list(H.nodes())
+        node_set = set(selected_nodes)
+
         nodes = []
         links = []
 
-        # Get top nodes by degree
-        node_degrees = sorted(G.degree(), key=lambda x: x[1], reverse=True)[:limit]
-        node_set = {n[0] for n in node_degrees}
-
         for node_id in node_set:
-            data = G.nodes.get(node_id, {})
+            data = H.nodes.get(node_id, {})
             nodes.append({
                 "id": node_id,
                 "label": data.get("label", node_id),
                 "community": state.node_to_community.get(node_id),
+                "degree": deg_map.get(node_id, 0),
             })
 
-        for u, v, data in G.edges(data=True):
+        for u, v, data in H.edges(data=True):
             if u in node_set and v in node_set:
                 links.append({
                     "source": u,
