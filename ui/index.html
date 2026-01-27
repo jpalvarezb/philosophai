@@ -423,6 +423,8 @@
         const traversalLinks = new Set();
         const gestureHighlightNodes = new Set();
         let citationData = [];
+        const citationStore = new Map(); // key: "answerId:index" -> citation
+        let citationAnswerSeq = 0;
         let citationHoverSeq = 0;
         let chatboxRect = null;
 
@@ -559,23 +561,29 @@
             };
         }
 
-        function sanitizeAnswer(text, citations) {
+        function sanitizeAnswer(text, citations, { answerId = null } = {}) {
             if (!text) return '';
 
             // Map chunk_id -> index for cases where the model returns [[chunk_id]] or [chunk_id]
             const chunkIdToIndex = new Map();
+            const citationsByIndex = new Map();
             (citations || []).forEach(c => {
                 if (c && c.chunk_id != null) {
                     chunkIdToIndex.set(String(c.chunk_id), c.index);
                 }
+                if (c && c.index != null) {
+                    citationsByIndex.set(String(c.index), c);
+                }
             });
 
             const cite = (num) => {
-                const c = citations.find(cit => cit.index === parseInt(num, 10));
+                const n = String(num);
+                const c = citationsByIndex.get(n);
                 // Use HTML entities for [ ] to avoid regex double-wrapping.
+                const keyAttr = (answerId != null) ? ` data-cite="${answerId}:${n}"` : '';
                 return c
-                    ? `<span class="citation-ref" data-index="${num}">&#91;${num}&#93;</span>`
-                    : `[${num}]`;
+                    ? `<span class="citation-ref" data-index="${n}"${keyAttr}>&#91;${n}&#93;</span>`
+                    : `[${n}]`;
             };
 
             let out = text;
@@ -685,6 +693,8 @@
             highlightNodes.clear();
             gestureHighlightNodes.clear();
             citationData = [];
+            citationStore.clear();
+            citationAnswerSeq = 0;
             resetGraphToBase();
             
             // Call backend reset
@@ -1667,10 +1677,19 @@
                     resetGraphToBase();
                 }
 
-                citationData = data.citations || [];
+                const localCitations = data.citations || [];
+                citationData = localCitations;
+                const answerId = ++citationAnswerSeq;
+                if (localCitations.length) {
+                    localCitations.forEach(c => {
+                        if (c && c.index != null) {
+                            citationStore.set(`${answerId}:${c.index}`, c);
+                        }
+                    });
+                }
                 processTraversal(data);
 
-                const formattedAnswer = sanitizeAnswer(data.answer, citationData) || '...';
+                const formattedAnswer = sanitizeAnswer(data.answer, localCitations, { answerId }) || '...';
                 thinker.complete(formattedAnswer, { trusted: true });
                 setupCitationHover();
 
@@ -1730,17 +1749,21 @@
                 });
             }
 
-            graphData.nodes.forEach(n => { n.neighbors = n.neighbors || []; });
+            const normalized = normalizeGraphData({ nodes: graphData.nodes, links: graphData.links });
+            graphData = normalized;
+            nodesById = Object.fromEntries(graphData.nodes.map(n => [n.id, n]));
+
+            graphData.nodes.forEach(n => { n.neighbors = []; });
             graphData.links.forEach(link => {
-                const src = typeof link.source === 'object' ? link.source : nodesById[link.source];
-                const tgt = typeof link.target === 'object' ? link.target : nodesById[link.target];
+                const src = nodesById[link.source];
+                const tgt = nodesById[link.target];
                 if (src && tgt) {
-                    if (!src.neighbors.includes(tgt)) src.neighbors.push(tgt);
-                    if (!tgt.neighbors.includes(src)) tgt.neighbors.push(src);
+                    src.neighbors.push(tgt);
+                    tgt.neighbors.push(src);
                 }
             });
 
-            setGraphData(normalizeGraphData({ nodes: graphData.nodes, links: graphData.links }), 'processTraversal');
+            setGraphData(graphData, 'processTraversal');
             Graph.nodeCanvasObject(Graph.nodeCanvasObject());
         }
 
@@ -1865,7 +1888,21 @@
                 }
             });
 
-            setGraphData(normalizeGraphData(graphData), 'resetGraphToBase');
+            const normalized = normalizeGraphData(graphData);
+            graphData = normalized;
+            nodesById = Object.fromEntries(graphData.nodes.map(n => [n.id, n]));
+
+            graphData.nodes.forEach(n => { n.neighbors = []; });
+            graphData.links.forEach(link => {
+                const src = nodesById[link.source];
+                const tgt = nodesById[link.target];
+                if (src && tgt) {
+                    src.neighbors.push(tgt);
+                    tgt.neighbors.push(src);
+                }
+            });
+
+            setGraphData(graphData, 'resetGraphToBase');
             Graph.nodeCanvasObject(Graph.nodeCanvasObject());
         }
 
@@ -1933,8 +1970,14 @@
 
             document.querySelectorAll('.citation-ref').forEach(el => {
                 el.onmouseenter = e => {
-                    const idx = parseInt(el.dataset.index, 10);
-                    const c = citationData.find(cit => cit.index === idx);
+                    const citeKey = el.dataset.cite;
+                    let c = null;
+                    if (citeKey && citationStore.has(citeKey)) {
+                        c = citationStore.get(citeKey);
+                    } else {
+                        const idx = parseInt(el.dataset.index, 10);
+                        c = citationData.find(cit => cit.index === idx);
+                    }
                     if (!c) return;
 
                     const content = c.full_content || c.preview || '';
