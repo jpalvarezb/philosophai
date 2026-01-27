@@ -256,6 +256,16 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(e))
 
     # Agentic greeting (LLM-generated)
+    @app.post("/api/agent/reset")
+    async def agent_reset():
+        if not state.ready or not state.philosopher_agent:
+            raise HTTPException(status_code=503, detail="Agent not initialized")
+        try:
+            state.philosopher_agent.reset_session()
+            return {"status": "ok", "message": "Session reset"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
     @app.get("/api/agent/greeting")
     async def agent_greeting():
         if not state.ready or not state.philosopher_agent:

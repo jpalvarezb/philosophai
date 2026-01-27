@@ -337,13 +337,13 @@ STYLE
 class PhilosopherAgent:
     """
     An agentic query handler using OpenAI function calling.
-    
+
     Unlike the hardcoded MultiHopAgent pipeline, this agent:
     - Uses LLM-driven tool selection
     - Explicitly reasons via sequential_thinking
     - Respects phase-based tool access control
     """
-    
+
     def __init__(
         self,
         agent_tools: "AgentTools",
@@ -357,7 +357,7 @@ class PhilosopherAgent:
         self.llm_client = llm_client
         self.llm_model = llm_model
         self.verbose = verbose
-        
+
         # State managed per-query
         self._current_phase = Phase.SESSION
         self._scope = None
@@ -376,7 +376,13 @@ class PhilosopherAgent:
         self._traversal_path: list[str] = []  # Stack of visited node IDs
         self._traversal_history: list[dict] = []  # Full history with context
         self._current_node: str | None = None  # Current position in graph
-    
+
+    def reset_session(self):
+        """Full reset of the session, including conversation history."""
+        self._reset_state()
+        self._last_qas = []
+        trace_logger.info("[AGENT] 🔄 Session fully reset (history cleared)")
+
     def _reset_state(self):
         """Reset state for a new query."""
         self._current_phase = Phase.SESSION
@@ -405,7 +411,7 @@ class PhilosopherAgent:
         system_msg = SYSTEM_PROMPT + (
             "\n\nGREET QUICKLY:\n"
             "- Output exactly one sentence, under 22 words.\n"
-            "- Introduce yourself as Phil and mention your specialties\n"
+            "- Introduce yourself as Phil and mention your areas of focus.\n"
             "- End by inviting the user's question.\n"
             "- No citations, markdown, bullets, or lists."
         )
@@ -416,14 +422,14 @@ class PhilosopherAgent:
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": "Give the greeting now."},
                 ],
-                temperature=0.4,
+                temperature=0.3,
                 max_tokens=60,
             )
             text = resp.choices[0].message.content.strip()
             return text[:200]
         except Exception:
             return "Phil here—graph-walking with inline citations. What topic do you want to probe?"
-    
+
     def _check_phase(self, tool_name: str) -> str | None:
         """Check if tool is allowed in current phase. Returns error message if not."""
         allowed = PHASE_TOOLS.get(self._current_phase, set())
@@ -455,7 +461,7 @@ class PhilosopherAgent:
                 f"Allowed tools: {sorted(allowed)}"
             )
         return None
-    
+
     def _advance_phase(self, to_phase: Phase) -> str:
         """Advance to the next phase."""
         valid_transitions = {
@@ -467,23 +473,23 @@ class PhilosopherAgent:
             Phase.SYNTHESIS: {Phase.DONE},
             Phase.DONE: set(),  # Terminal - no transitions allowed
         }
-        
+
         if to_phase not in valid_transitions.get(self._current_phase, set()):
             trace_logger.info(f"[AGENT] ❌ Invalid phase transition: {self._current_phase.value} → {to_phase.value}")
             return f"Cannot transition from {self._current_phase.value} to {to_phase.value}"
-        
+
         old_phase = self._current_phase
         self._current_phase = to_phase
         trace_logger.info(f"[AGENT] 📍 Phase: {old_phase.value.upper()} → {to_phase.value.upper()}")
         return f"Advanced to {to_phase.value} phase"
-    
+
     def _execute_tool(self, name: str, arguments: dict) -> str:
         """Execute a tool and return the result string."""
         # Check phase
         error = self._check_phase(name)
         if error:
             return error
-        
+
         if name == "sequential_thinking":
             result = self.agent_tools.sequential_thinking(**arguments)
             self._thoughts.append(result.data)
@@ -519,7 +525,7 @@ class PhilosopherAgent:
         elif name == "skip_guard":
             self._advance_phase(Phase.SCOPE)
             return "Guard skipped. Proceeding to scope."
-        
+
         elif name == "read_community_summary":
             result = self.agent_tools.read_community_summary(
                 arguments.get("community_id", -1)
@@ -550,7 +556,7 @@ class PhilosopherAgent:
             else:
                 lines = [str(item) for item in items]
             return f"Available {category}:\n" + "\n".join(lines)
-        
+
         elif name == "set_scope":
             result = self.agent_tools.set_scope(
                 authors=arguments.get("authors"),
@@ -573,13 +579,13 @@ class PhilosopherAgent:
                 scope_logger.info(f"[SCOPE] Chunks: {result.data.get('chunk_count', '?')} | Texts: {result.data.get('text_count', '?')}")
                 self._advance_phase(Phase.RETRIEVAL)
             return result.message + " Advanced to retrieval phase."
-        
+
         elif name == "skip_scope":
             self._scope = None
             self.agent_tools.clear_active_scope()
             self._advance_phase(Phase.RETRIEVAL)
             return "Scope skipped. Advanced to retrieval phase with global search."
-        
+
         elif name == "search_vectors":
             result = self.agent_tools.search_vectors(
                 arguments.get("query", ""),
@@ -617,7 +623,7 @@ class PhilosopherAgent:
             if cited:
                 lines.append(f"Cited chunks from reports: {len(cited)}")
             return "\\n".join(lines)
-        
+
         elif name == "get_entities_from_chunks":
             result = self.agent_tools.get_entities_from_chunks(
                 arguments.get("chunk_ids", []),
@@ -625,7 +631,7 @@ class PhilosopherAgent:
             )
             if not result.success:
                 return f"Error: {result.message}"
-            
+
             # Handle scored vs unscored response
             if "entities" in result.data:
                 # Scored response
@@ -633,16 +639,16 @@ class PhilosopherAgent:
                 entity_ids = [e["entity_id"] for e in entities]
                 self._collected_entities.extend(entity_ids)
                 self._collected_entities = list(dict.fromkeys(self._collected_entities))
-                
+
                 trace_logger.info(f"[AGENT] 🏷️ Extracted {len(entities)} scored entities")
                 if entities:
                     top3 = [(e["label"], e["query_relevance"], e["reason"]) for e in entities[:3]]
                     trace_logger.info(f"[AGENT]    Top 3: {top3}")
-                
+
                 # Auto-advance to traversal if we have entities
                 if self._current_phase == Phase.RETRIEVAL and entities:
                     self._advance_phase(Phase.TRAVERSAL)
-                
+
                 # Format output with scores
                 lines = [f"Found {len(entities)} entities (scored by query relevance):"]
                 lines.append(f"Query tokens: {result.data.get('query_tokens', [])}")
@@ -661,7 +667,7 @@ class PhilosopherAgent:
                 if self._current_phase == Phase.RETRIEVAL and entity_ids:
                     self._advance_phase(Phase.TRAVERSAL)
                 return f"Found {len(entity_ids)} entities (provide query parameter for relevance scoring)."
-        
+
         elif name == "get_chunk_content":
             result = self.agent_tools.get_chunk_content(arguments.get("chunk_ids", []))
             if not result.success:
@@ -675,7 +681,7 @@ class PhilosopherAgent:
                     self._read_chunk_ids_this_turn.add(cid)
             lines = [f"[{c['id']}]\n{c['content']}\n" for c in chunks]
             return "\n---\n".join(lines)
-        
+
         elif name == "expand_node":
             result = self.agent_tools.expand_node(
                 arguments.get("node_id", ""),
@@ -686,7 +692,7 @@ class PhilosopherAgent:
             data = result.data
             source_id = data["node_id"]
             source_label = data["label"]
-            
+
             # Update traversal state - track where we are in the graph
             self._current_node = source_id
             if source_id not in self._traversal_path:
@@ -698,7 +704,7 @@ class PhilosopherAgent:
                     "in_scope_neighbors": data.get("in_scope_neighbors", 0),
                     "step": len(self._traversal_path),
                 })
-            
+
             # Track explored edges (only in-scope ones for strict scope)
             added_in_scope = 0
             for n in data["neighbors"]:
@@ -713,24 +719,24 @@ class PhilosopherAgent:
             # Count one hop per successful expansion (not per neighbor listed)
             if added_in_scope > 0:
                 self._new_edges_count += 1
-            
+
             # Build output with scope info
             node_in_scope = data.get("node_in_scope", True)
             trace_logger.info(f"[AGENT] 🕸️ Expand node: {data['label']} (community={data['community_id']}, in_scope={node_in_scope})")
             trace_logger.info(f"[AGENT]    Edges: {data.get('total_neighbors', len(data['neighbors']))} total, {data.get('in_scope_neighbors', '?')} in-scope")
             trace_logger.info(f"[AGENT]    Path: {' → '.join(self._traversal_path[-5:])}")
-            
+
             lines = [f"Node: {data['label']} (community: {data['community_id']})"]
             lines.append(f"Traversal position: step {len(self._traversal_path)} | path: {' → '.join(self._traversal_path[-3:])}")
-            
+
             # Warn if node is not in induced subgraph
             if data.get("scope_active") and not node_in_scope:
                 lines.append("⚠️ WARNING: This node is NOT in the scoped induced subgraph - it has no in-scope edges.")
                 lines.append("   Consider using backtrack to return to a previous node.")
-            
+
             if data.get("scope_active"):
                 lines.append(f"Total edges: {data['total_neighbors']} ({data['in_scope_neighbors']} in-scope, {data['out_scope_neighbors']} out-of-scope)")
-            
+
             lines.append(f"Neighbors ({len(data['neighbors'])} shown):")
             for n in data["neighbors"]:
                 scope_marker = "" if n.get("in_scope", True) else " [OUT OF SCOPE]"
@@ -741,14 +747,14 @@ class PhilosopherAgent:
                     f"  - {n['node_id']} | {score_info} ({breakdown}) | via '{n['predicate']}' | {chunk_info}{scope_marker}"
                 )
             return "\n".join(lines)
-        
+
         elif name == "backtrack":
             steps = arguments.get("steps", 1)
             to_node_id = arguments.get("to_node_id")
-            
+
             if not self._traversal_path:
                 return "Error: No traversal history to backtrack through. Use expand_node first."
-            
+
             # If specific node requested, find it
             if to_node_id:
                 if to_node_id not in self._traversal_path:
@@ -768,7 +774,7 @@ class PhilosopherAgent:
                 else:
                     self._traversal_path = self._traversal_path[:-steps]
                 self._current_node = self._traversal_path[-1] if self._traversal_path else None
-            
+
             # Build response
             if self._current_node:
                 # Find the history entry for current node
@@ -784,12 +790,12 @@ class PhilosopherAgent:
                 ]
             else:
                 lines = ["Backtracked to start. No current node. Use expand_node to begin traversal."]
-            
+
             return "\n".join(lines)
-        
+
         elif name == "get_traversal_state":
             lines = ["=== Traversal State ==="]
-            
+
             if not self._traversal_path:
                 lines.append("No traversal started. Use expand_node to begin.")
             else:
@@ -803,13 +809,13 @@ class PhilosopherAgent:
                     lines.append(
                         f"  {marker} [{h['step']}] {h['label']} (community={h['community_id']}, in_scope_edges={h['in_scope_neighbors']})"
                     )
-            
+
             lines.append("")
             lines.append(f"Edges explored: {len(self._traversed_edges)}")
             lines.append(f"Entities collected: {len(self._collected_entities)}")
-            
+
             return "\n".join(lines)
-        
+
         elif name == "advance_to_synthesis":
             if self._current_phase in (Phase.RETRIEVAL, Phase.TRAVERSAL):
                 # Ensure we have actively traversed new edges this turn
@@ -822,7 +828,7 @@ class PhilosopherAgent:
                 return "Advanced to synthesis phase. Now call synthesize_answer with your response."
             else:
                 return f"Cannot advance to synthesis from {self._current_phase.value} phase."
-        
+
         elif name == "synthesize_answer":
             answer = arguments.get("answer", "")
             cited_chunk_ids = arguments.get("cited_chunk_ids", [])
@@ -856,17 +862,17 @@ class PhilosopherAgent:
             self._current_phase = Phase.DONE
             trace_logger.info(f"[AGENT] 📍 Phase: SYNTHESIS → DONE")
             return f"Answer recorded with {len(cited_chunk_ids)} citations. Query complete."
-        
+
         return f"Unknown tool: {name}"
-    
+
     def query(self, question: str, max_iterations: int = 25) -> dict:
         """
         Execute a query using the agentic reasoning loop.
-        
+
         Args:
             question: The user's question
             max_iterations: Maximum tool calls before stopping
-        
+
         Returns:
             Dict with answer, citations, and reasoning trace
         """
@@ -895,14 +901,14 @@ class PhilosopherAgent:
             # Continue from prior phase/state; always go to RETRIEVAL for follow-ups to get fresh evidence
             # while preserving graph state (_traversal_path, etc.)
             self._current_phase = Phase.RETRIEVAL
-        
+
         if not self.llm_client:
             raise ValueError("LLM client not provided")
-        
+
         trace_logger.info(f"[AGENT] ═══════════════════════════════════════════════════════")
         trace_logger.info(f"[AGENT] Query: {question[:100]}{'...' if len(question) > 100 else ''}")
         trace_logger.info(f"[AGENT] Max iterations: {max_iterations}")
-        
+
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
         ]
@@ -921,30 +927,30 @@ class PhilosopherAgent:
                 }
             )
         messages.append({"role": "user", "content": f"Answer this question: {question}"})
-        
+
         iteration = 0
         done = False
-        
+
         while not done and iteration < max_iterations:
             iteration += 1
-            
+
             trace_logger.info(f"[AGENT] ─── Iteration {iteration} | Phase: {self._current_phase.value.upper()} ───")
-            
+
             response = self.llm_client.chat.completions.create(
                 model=self.llm_model,
                 messages=messages,
                 tools=TOOL_SCHEMAS,
                 tool_choice="required",
             )
-            
+
             assistant_message = response.choices[0].message
             messages.append(assistant_message)
-            
+
             if assistant_message.tool_calls:
                 for tool_call in assistant_message.tool_calls:
                     func_name = tool_call.function.name
                     func_args = json.loads(tool_call.function.arguments)
-                    
+
                     # Log tool call
                     if func_name == "sequential_thinking":
                         thought = func_args.get('thought', '')[:150]
@@ -952,20 +958,20 @@ class PhilosopherAgent:
                     else:
                         args_str = json.dumps(func_args, default=str)[:100]
                         trace_logger.tool_call(func_name, args=args_str)
-                    
+
                     result = self._execute_tool(func_name, func_args)
-                    
+
                     # Log result summary
                     result_preview = result[:200] if len(result) > 200 else result
                     if func_name != "sequential_thinking":
                         trace_logger.tool_result(func_name, result=result_preview.replace('\n', ' ')[:150])
-                    
+
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
                         "content": result,
                     })
-                    
+
                     # Check if we're done (either by name or phase)
                     if self._current_phase == Phase.DONE:
                         trace_logger.info(f"[AGENT] ✅ Synthesis complete")
@@ -974,7 +980,7 @@ class PhilosopherAgent:
             else:
                 # No tool calls - model wants to respond directly
                 trace_logger.info(f"[AGENT] ⚠️ No tool call from model")
-                
+
                 # If we have an answer, we're done
                 if self._final_answer:
                     done = True
@@ -984,7 +990,7 @@ class PhilosopherAgent:
                         "role": "user",
                         "content": "Please continue by calling the appropriate tool. Remember to use sequential_thinking to document your reasoning.",
                     })
-        
+
         # Build traversal node metadata for nodes seen during traversal/collection
         traversal_node_ids = set(self._collected_entities)
         for e in self._traversed_edges:
@@ -1012,7 +1018,7 @@ class PhilosopherAgent:
                 citations_data = [c.to_dict() for c in self._citations]
             else:
                 citations_data = [{"chunk_id": cid} for cid in self._citations]
-        
+
         # Persist last QA (keep last 5)
         self._last_qas.append((question, self._final_answer or ""))
         self._last_qas = self._last_qas[-5:]
@@ -1039,7 +1045,7 @@ class PhilosopherAgent:
             "iterations": iteration,
             "session_continued": session_continued,
         }
-    
+
     def query_streaming(
         self,
         question: str,
@@ -1048,21 +1054,21 @@ class PhilosopherAgent:
     ) -> dict:
         """
         Execute a query with streaming events.
-        
+
         Args:
             question: The user's question
             on_event: Callback for streaming events
             max_iterations: Maximum tool calls before stopping
-        
+
         Returns:
             Dict with answer, citations, and reasoning trace
         """
         on_event({"type": "status", "message": "Starting agentic query..."})
-        
+
         # For now, run non-streaming and emit events
         # TODO: Implement true streaming with OpenAI streaming API
         result = self.query(question, max_iterations)
-        
+
         on_event({"type": "complete", "message": "Query complete"})
         return result
 
