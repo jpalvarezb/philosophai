@@ -56,36 +56,96 @@
 
         #chatbox {
             position: absolute;
-            top: 60px;
-            left: 40px;
+            top: 64px;
+            left: 44px;
             width: min(460px, 90vw);
-            background: #000;
-            border: 4px solid #fff;
+            background: transparent;
+            border: none;
             border-radius: 0;
             box-shadow: none;
             display: flex;
             flex-direction: column;
             gap: 0;
-            overflow: hidden;
+            overflow: visible;
             z-index: 20;
-            cursor: grab;
+            cursor: default;
+        }
+
+        /* The White Outline (Drag Handle) */
+        #chatbox::before {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            background: #fff;
+            z-index: -1;
+            /* Stepped pixel corner (missing 4px block) */
+            clip-path: polygon(
+                4px 0, calc(100% - 4px) 0, 
+                calc(100% - 4px) 4px, 100% 4px, 
+                100% calc(100% - 4px), calc(100% - 4px) calc(100% - 4px),
+                calc(100% - 4px) 100%, 4px 100%, 
+                4px calc(100% - 4px), 0 calc(100% - 4px),
+                0 4px, 4px 4px
+            );
+            pointer-events: auto;
+        }
+
+        /* The Black Background */
+        #chatbox::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: #000;
+            z-index: -1;
+            /* Match the stepped corner */
+            clip-path: polygon(
+                4px 0, calc(100% - 4px) 0, 
+                calc(100% - 4px) 4px, 100% 4px, 
+                100% calc(100% - 4px), calc(100% - 4px) calc(100% - 4px),
+                calc(100% - 4px) 100%, 4px 100%, 
+                4px calc(100% - 4px), 0 calc(100% - 4px),
+                0 4px, 4px 4px
+            );
+            pointer-events: none;
         }
 
         #chatbox.dragging {
             cursor: grabbing;
         }
 
+        #reset-btn {
+            position: absolute;
+            right: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            padding: 0;
+            color: #fff;
+            opacity: 1; /* Always fully visible */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+
+        #reset-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+
         .chat-header {
-            padding: 8px 12px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 24px 16px;
+            border-bottom: 3px solid #fff;
             font-size: 10px;
             letter-spacing: 0.08em;
             text-transform: none;
             color: #fff;
             display: flex;
-            justify-content: space-between;
             align-items: center;
             user-select: none;
+            position: relative;
         }
 
         .chat-header span:first-child {
@@ -301,7 +361,11 @@
     <div id="chatbox" role="region" aria-label="Conversation window">
         <div class="chat-header">
             <span>PHIL KNOWLEDGE SYSTEM</span>
-            <span></span>
+            <button id="reset-btn" title="Reset Session" aria-label="Reset">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M16 2h-2v2h2v2H4v2H2v5h2V8h12v2h-2v2h2v-2h2V8h2V6h-2V4h-2V2zM6 20h2v2h2v-2H8v-2h12v-2h2v-5h-2v5H8v-2h2v-2H8v2H6v2H4v2h2v2z" fill="#fff"/>
+                </svg>
+            </button>
         </div>
         <div id="chat-log" aria-live="polite"></div>
         <div id="prompt-row">
@@ -509,6 +573,28 @@
                 runQuery();
             }
         }
+
+        function resetSystem() {
+            chatLog.innerHTML = '';
+            traversalNodes.clear();
+            traversalLinks.clear();
+            highlightNodes.clear();
+            citationData = [];
+            resetGraphToBase();
+            
+            // Call backend reset
+            fetch(`${API_BASE}/api/agent/reset`, { method: 'POST' })
+                .then(() => bootSequence())
+                .catch(err => {
+                    console.error('Reset failed', err);
+                    bootSequence();
+                });
+        }
+
+        document.getElementById('reset-btn').addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent drag start if clicking button
+            resetSystem();
+        });
 
         async function runQuery() {
             const question = promptInput.value.trim();
@@ -1037,40 +1123,51 @@
 
         function repelGraphFromChatbox() {
             if (!Graph || !chatboxRect) return;
-            const padding = 18;
-            const bounds = {
-                left: chatboxRect.left - padding,
-                right: chatboxRect.right + padding,
-                top: chatboxRect.top - padding,
-                bottom: chatboxRect.bottom + padding
-            };
 
-            const chatCenter = {
-                x: chatboxRect.left + chatboxRect.width / 2,
-                y: chatboxRect.top + chatboxRect.height / 2
-            };
-            const centerGraph = Graph.screen2GraphCoords(chatCenter.x, chatCenter.y);
-            if (!centerGraph) return;
+            const tl = Graph.screen2GraphCoords(chatboxRect.left, chatboxRect.top);
+            const br = Graph.screen2GraphCoords(chatboxRect.right, chatboxRect.bottom);
+            if (!tl || !br) return;
+
+            const minX = Math.min(tl.x, br.x);
+            const maxX = Math.max(tl.x, br.x);
+            const minY = Math.min(tl.y, br.y);
+            const maxY = Math.max(tl.y, br.y);
+
+            const midX = (minX + maxX) / 2;
+            const midY = (minY + maxY) / 2;
+            const halfW = (maxX - minX) / 2;
+            const halfH = (maxY - minY) / 2;
+
+            const k = Graph.zoom(); 
+            const pad = 25 / k; // Padding in graph units
 
             graphData.nodes.forEach(node => {
-                const coords = Graph.graph2ScreenCoords(node.x, node.y);
-                if (!coords) return;
-                if (
-                    coords.x >= bounds.left && coords.x <= bounds.right &&
-                    coords.y >= bounds.top && coords.y <= bounds.bottom
-                ) {
-                    const dx = node.x - centerGraph.x;
-                    const dy = node.y - centerGraph.y;
-                    const dist = Math.max(Math.hypot(dx, dy), 1);
-                    const strength = 0.5;
-                    node.vx += (dx / dist) * strength;
-                    node.vy += (dy / dist) * strength;
+                const dx = node.x - midX;
+                const dy = node.y - midY;
+                const adx = Math.abs(dx);
+                const ady = Math.abs(dy);
+
+                const overlapX = (halfW + pad) - adx;
+                const overlapY = (halfH + pad) - ady;
+
+                if (overlapX > 0 && overlapY > 0) {
+                    // Push out along shortest axis
+                    const strength = 2.0;
+                    if (overlapX < overlapY) {
+                        const sign = dx > 0 ? 1 : -1;
+                        node.vx += sign * strength;
+                        node.x += sign * (strength * 0.1); 
+                    } else {
+                        const sign = dy > 0 ? 1 : -1;
+                        node.vy += sign * strength;
+                        node.y += sign * (strength * 0.1);
+                    }
                 }
             });
         }
 
         function enableDragging() {
-            const dragHandle = chatbox.querySelector('.chat-header');
+            const dragHandle = chatbox;
             let pointerId = null;
             let offsetX = 0;
             let offsetY = 0;
@@ -1090,14 +1187,28 @@
                 pointerId = null;
                 chatbox.classList.remove('dragging');
                 updateChatboxRect();
+                if (Graph) Graph.d3AlphaTarget(0); // Cooldown
             };
 
             dragHandle.addEventListener('pointerdown', e => {
+                // Allow dragging from header or the box border/background itself, 
+                // but NOT from text selection areas or inputs
+                const target = e.target;
+                const isInput = target.tagName === 'INPUT' || target.closest('input');
+                const isLog = target.closest('#chat-log');
+                const isLink = target.closest('a') || target.closest('button') || target.closest('.citation-ref');
+                
+                // If clicking log, input, interactive elements, or the reset button, don't drag
+                if (isInput || isLog || isLink || target.closest('#reset-btn')) return;
+
                 pointerId = e.pointerId;
-                offsetX = e.clientX - chatbox.offsetLeft;
-                offsetY = e.clientY - chatbox.offsetTop;
+                const rect = chatbox.getBoundingClientRect();
+                offsetX = e.clientX - rect.left; // relative to box
+                offsetY = e.clientY - rect.top;
+                
                 chatbox.classList.add('dragging');
                 dragHandle.setPointerCapture(pointerId);
+                if (Graph) Graph.d3AlphaTarget(0.3).restart(); // Wake up
             });
 
             dragHandle.addEventListener('pointermove', onPointerMove);
