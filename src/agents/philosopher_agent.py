@@ -49,6 +49,21 @@ other tool calls to document your reasoning.""",
     {
         "type": "function",
         "function": {
+            "name": "detect_followup",
+            "description": "Decide if the new query is a follow-up to recent QA context. Return IN if follow-up (reuse state), OUT if new topic.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "recent_qas": {"type": "array", "items": {"type": "string"}, "description": "Up to 5 recent Q/A pairs as strings"},
+                },
+                "required": ["question", "recent_qas"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "guard_relevance",
             "description": "Decide if the query fits Phil's domain (philosophy/theology/history/culture). Return a short verdict; if out-of-domain, tell the user to ask within scope.",
             "parameters": {
@@ -263,21 +278,23 @@ SAFETY & ETHICS (CRITICAL)
 - Never encourage harmful, illegal, or self-destructive actions. Keep a neutral, academic tone.
 
 WORKFLOW (phase-gated)
-0) GUARD
+0) SESSION
+   - If this is a follow-up, continue prior context but go to RETRIEVAL to find new evidence.
+   - If new topic, start fresh (GUARD).
    - Call guard_relevance(query) first. If out-of-domain, stop with a brief redirection. If in-domain, proceed to scope.
-1) SCOPE (must be first)
+2) SCOPE (must be first)
    - Specific author/text/tradition -> set_scope
    - Broad/comparative/open-ended -> skip_scope
    - list_available_sources if you need valid scope values
-2) RETRIEVAL
+3) RETRIEVAL
    - Unscoped/global: search_community_reports(query) to find relevant communities -> read_community_summary to check topics -> search_vectors
    - Scoped: go straight to search_vectors(query) (communities are derived from scope)
    - get_entities_from_chunks(chunk_ids, query) to score seeds; get_chunk_content to read evidence
-3) TRAVERSAL (graph exploration)
+4) TRAVERSAL (graph exploration)
    - expand_node on high-scoring seeds
    - If path is weak or node_in_scope is false -> backtrack, use get_traversal_state if lost
    - Continue until you have enough evidence, then advance_to_synthesis
-4) SYNTHESIS
+5) SYNTHESIS
    - synthesize_answer with citations [1], [2], ... matching cited_chunk_ids order
 
 SCORES & HOW TO USE THEM
@@ -342,7 +359,7 @@ class PhilosopherAgent:
         self.verbose = verbose
         
         # State managed per-query
-        self._current_phase = Phase.GUARD
+        self._current_phase = Phase.SESSION
         self._scope = None
         self._collected_chunks: list[str] = []
         self._collected_entities: list[str] = []
@@ -350,6 +367,11 @@ class PhilosopherAgent:
         self._thoughts: list[dict] = []
         self._final_answer: str = ""
         self._citations: list = []
+        self._last_qas: list[tuple[str, str]] = []  # keep last 5 (question, answer)
+        self._new_edges_count: int = 0  # Track hops explored in the current turn
+        self._read_chunk_ids: set[str] = set()  # All chunks read this session
+        self._read_chunk_ids_this_turn: set[str] = set()  # Chunks read in the current turn
+        self._session_continued_current_turn: bool = False
         # Traversal state for backtracking
         self._traversal_path: list[str] = []  # Stack of visited node IDs
         self._traversal_history: list[dict] = []  # Full history with context
@@ -357,7 +379,7 @@ class PhilosopherAgent:
     
     def _reset_state(self):
         """Reset state for a new query."""
-        self._current_phase = Phase.GUARD
+        self._current_phase = Phase.SESSION
         self._scope = None
         self._collected_chunks = []
         self._collected_entities = []
@@ -365,6 +387,10 @@ class PhilosopherAgent:
         self._thoughts = []
         self._final_answer = ""
         self._citations = []
+        self._new_edges_count = 0
+        self._read_chunk_ids = set()
+        self._read_chunk_ids_this_turn = set()
+        self._session_continued_current_turn = False
         # Reset traversal state
         self._traversal_path = []
         self._traversal_history = []
@@ -403,6 +429,7 @@ class PhilosopherAgent:
         allowed = PHASE_TOOLS.get(self._current_phase, set())
         # Map tool names to phase tool names
         tool_mapping = {
+            "detect_followup": "detect_followup",
             "guard_relevance": "guard_relevance",
             "skip_guard": "skip_guard",
             "sequential_thinking": "sequential_thinking",
@@ -432,6 +459,7 @@ class PhilosopherAgent:
     def _advance_phase(self, to_phase: Phase) -> str:
         """Advance to the next phase."""
         valid_transitions = {
+            Phase.SESSION: {Phase.GUARD, Phase.SCOPE},
             Phase.GUARD: {Phase.SCOPE},
             Phase.SCOPE: {Phase.RETRIEVAL},
             Phase.RETRIEVAL: {Phase.TRAVERSAL, Phase.SYNTHESIS},
@@ -460,6 +488,18 @@ class PhilosopherAgent:
             result = self.agent_tools.sequential_thinking(**arguments)
             self._thoughts.append(result.data)
             return result.message
+
+        elif name == "detect_followup":
+            question = arguments.get("question", "")
+            recent = arguments.get("recent_qas", [])
+            verdict = self._llm_followup_check(question, recent)
+            if verdict == "in":
+                # continue existing state; jump to traversal if we have a path, else scope
+                self._current_phase = Phase.TRAVERSAL if self._traversal_path else Phase.SCOPE
+                return "Follow-up detected. Continuing prior context."
+            else:
+                self._reset_state()
+                return "New topic detected. Context reset; starting fresh."
 
         elif name == "guard_relevance":
             q = arguments.get("query", "")
@@ -627,6 +667,12 @@ class PhilosopherAgent:
             if not result.success:
                 return f"Error: {result.message}"
             chunks = result.data["chunks"]
+            # Track which chunks have been read
+            for c in chunks:
+                cid = c.get("id")
+                if cid:
+                    self._read_chunk_ids.add(cid)
+                    self._read_chunk_ids_this_turn.add(cid)
             lines = [f"[{c['id']}]\n{c['content']}\n" for c in chunks]
             return "\n---\n".join(lines)
         
@@ -654,6 +700,7 @@ class PhilosopherAgent:
                 })
             
             # Track explored edges (only in-scope ones for strict scope)
+            added_in_scope = 0
             for n in data["neighbors"]:
                 if n.get("in_scope", True):  # Only track in-scope edges
                     self._traversed_edges.append({
@@ -661,6 +708,11 @@ class PhilosopherAgent:
                         "target": n["node_id"],
                         "label": n["predicate"],
                     })
+                    added_in_scope += 1
+
+            # Count one hop per successful expansion (not per neighbor listed)
+            if added_in_scope > 0:
+                self._new_edges_count += 1
             
             # Build output with scope info
             node_in_scope = data.get("node_in_scope", True)
@@ -760,8 +812,12 @@ class PhilosopherAgent:
         
         elif name == "advance_to_synthesis":
             if self._current_phase in (Phase.RETRIEVAL, Phase.TRAVERSAL):
-                if len(self._traversed_edges) < 2 and self._collected_entities:
-                    return "Traversal too shallow—expand_node along at least two promising edges before synthesis."
+                # Ensure we have actively traversed new edges this turn
+                if self._new_edges_count < 2 and self._collected_entities:
+                    return "Traversal too shallow—expand_node along at least two NEW promising edges before synthesis."
+                # Ensure we have read evidence this turn (prevents generic, ungrounded repeats)
+                if not self._read_chunk_ids_this_turn:
+                    return "No new evidence read yet—call get_chunk_content on the most relevant chunks before synthesis."
                 self._advance_phase(Phase.SYNTHESIS)
                 return "Advanced to synthesis phase. Now call synthesize_answer with your response."
             else:
@@ -770,20 +826,32 @@ class PhilosopherAgent:
         elif name == "synthesize_answer":
             answer = arguments.get("answer", "")
             cited_chunk_ids = arguments.get("cited_chunk_ids", [])
-            
-            # Validate citations
-            uncited = set(cited_chunk_ids) - set(self._collected_chunks)
-            if uncited:
-                return f"Error: These chunk IDs were not collected: {list(uncited)[:5]}"
-            
+
+            # Must cite something (inline citations)
+            if not cited_chunk_ids:
+                self._current_phase = Phase.TRAVERSAL
+                return "Error: Provide cited_chunk_ids for inline citations. Return to traversal, read evidence, then try again."
+
+            # Validate citations: must reference chunks that were actually read
+            unread = set(cited_chunk_ids) - set(self._read_chunk_ids)
+            if unread:
+                self._current_phase = Phase.TRAVERSAL
+                return f"Error: These chunk IDs were not read via get_chunk_content: {list(unread)[:5]}"
+
+            # Follow-up strictness: require at least one newly-read chunk this turn
+            if self._session_continued_current_turn:
+                if not (set(cited_chunk_ids) & self._read_chunk_ids_this_turn):
+                    self._current_phase = Phase.TRAVERSAL
+                    return "Error: Follow-up answers must cite at least one NEW chunk read this turn. Read new evidence, then try again."
+
             self._final_answer = answer
-            
+
             # Build proper citations
             if self.citation_builder and cited_chunk_ids:
                 self._citations = self.citation_builder.build_citations(cited_chunk_ids)
             else:
                 self._citations = cited_chunk_ids
-            
+
             # Transition to DONE (terminal state) - not SYNTHESIS (we're already there)
             self._current_phase = Phase.DONE
             trace_logger.info(f"[AGENT] 📍 Phase: SYNTHESIS → DONE")
@@ -803,10 +871,30 @@ class PhilosopherAgent:
             Dict with answer, citations, and reasoning trace
         """
         normalized_question = question.strip()
-        if self._is_irrelevant_query(normalized_question):
+
+        # Track per-turn activity (do not reset full graph state on follow-ups)
+        self._new_edges_count = 0
+        self._read_chunk_ids_this_turn = set()
+        self._session_continued_current_turn = False
+
+        # Reset per-turn outputs so follow-ups cannot reuse the prior answer/citations/thoughts
+        self._final_answer = ""
+        self._citations = []
+        self._thoughts = []
+
+        # Decide whether to reuse prior state (follow-up) or start fresh
+        recent_qas_str = [f"Q: {q}\nA: {a}" for q, a in self._last_qas[-5:]]
+        followup = self._llm_followup_check(normalized_question, recent_qas_str)
+        session_continued = False
+        if followup == "out":
             self._reset_state()
-            return self._reject_irrelevant(normalized_question)
-        self._reset_state()
+            self._current_phase = Phase.GUARD
+        else:
+            session_continued = True
+            self._session_continued_current_turn = True
+            # Continue from prior phase/state; always go to RETRIEVAL for follow-ups to get fresh evidence
+            # while preserving graph state (_traversal_path, etc.)
+            self._current_phase = Phase.RETRIEVAL
         
         if not self.llm_client:
             raise ValueError("LLM client not provided")
@@ -817,8 +905,22 @@ class PhilosopherAgent:
         
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Answer this question: {question}"},
         ]
+        if followup == "in" and recent_qas_str:
+            joined_context = "\n\n".join(recent_qas_str)
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"Recent conversation context (reuse state):\n{joined_context}\n\n"
+                        f"STATUS: You are continuing a session in phase {self._current_phase.value.upper()}. "
+                        "Do NOT call guard_relevance or skip_guard. "
+                        "Do NOT repeat the prior answer; directly answer the new question with new details and evidence. "
+                        "Use retrieval tools (search_vectors) and read evidence (get_chunk_content)."
+                    ),
+                }
+            )
+        messages.append({"role": "user", "content": f"Answer this question: {question}"})
         
         iteration = 0
         done = False
@@ -832,7 +934,7 @@ class PhilosopherAgent:
                 model=self.llm_model,
                 messages=messages,
                 tools=TOOL_SCHEMAS,
-                tool_choice="auto",
+                tool_choice="required",
             )
             
             assistant_message = response.choices[0].message
@@ -911,6 +1013,10 @@ class PhilosopherAgent:
             else:
                 citations_data = [{"chunk_id": cid} for cid in self._citations]
         
+        # Persist last QA (keep last 5)
+        self._last_qas.append((question, self._final_answer or ""))
+        self._last_qas = self._last_qas[-5:]
+
         return {
             "answer": self._final_answer or "No answer was synthesized within the iteration limit.",
             "citations": citations_data,
@@ -931,6 +1037,7 @@ class PhilosopherAgent:
             "traversal_nodes": traversal_nodes_meta,
             "thoughts": self._thoughts,
             "iterations": iteration,
+            "session_continued": session_continued,
         }
     
     def query_streaming(
@@ -1053,3 +1160,33 @@ class PhilosopherAgent:
             return (resp.choices[0].message.content or fallback).strip()
         except Exception:
             return fallback
+
+    def _llm_followup_check(self, question: str, recent_qas: list[str]) -> str:
+        """
+        LLM check to decide if current question is a follow-up.
+        Returns "in" (follow-up) or "out" (new topic).
+        """
+        if not self.llm_client or not recent_qas:
+            return "out"
+        try:
+            context = "\n\n".join(recent_qas[-5:])
+            resp = self.llm_client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Decide if the new user question is a follow-up to the prior Q&A context. "
+                            "Reply with exactly one token: IN (follow-up) or OUT (new topic). "
+                            "Be strict; only IN if the new question depends on or continues the prior discussion."
+                        ),
+                    },
+                    {"role": "user", "content": f"Previous QAs:\n{context}\n\nNew question:\n{question}"},
+                ],
+                max_tokens=3,
+                temperature=0,
+            )
+            text = (resp.choices[0].message.content or "").strip().lower()
+            return "in" if "in" in text[:5] else "out"
+        except Exception:
+            return "out"

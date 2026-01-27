@@ -518,13 +518,9 @@
             promptInput.value = '';
             disablePrompt();
 
-            traversalNodes.clear();
-            traversalLinks.clear();
-            highlightNodes.clear();
-
             const tooltip = document.getElementById('citation-tooltip');
             if (tooltip) tooltip.style.display = 'none';
-            resetGraphToBase();
+            // defer graph reset until we know if it's a follow-up
 
             const thinker = startThinkingLine();
 
@@ -538,6 +534,14 @@
                 if (!res.ok) throw new Error('Query failed');
 
                 const data = await res.json();
+
+                // If not continuing session, reset graph
+                if (!data.session_continued) {
+                    traversalNodes.clear();
+                    traversalLinks.clear();
+                    highlightNodes.clear();
+                    resetGraphToBase();
+                }
 
                 citationData = data.citations || [];
                 processTraversal(data);

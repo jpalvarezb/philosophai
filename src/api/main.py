@@ -55,6 +55,7 @@ class AgentQueryResponse(BaseModel):
     traversal: dict
     thoughts: list[dict]
     iterations: int
+    session_continued: bool = False
 
 
 # --- Application State ---
