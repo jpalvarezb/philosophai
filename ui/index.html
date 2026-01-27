@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PhilosophAI - Knowledge Graph RAG</title>
+    <link rel="icon" href="data:,">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');
         :root { color-scheme: dark; }
@@ -405,6 +406,7 @@
     </div>
 
     <div id="citation-tooltip"></div>
+    <video id="gesture-video" style="display:none" playsinline muted></video>
 
     <script src="//cdn.jsdelivr.net/npm/force-graph"></script>
     <script>
@@ -419,9 +421,82 @@
         const highlightNodes = new Set();
         const traversalNodes = new Set();
         const traversalLinks = new Set();
+        const gestureHighlightNodes = new Set();
         let citationData = [];
         let citationHoverSeq = 0;
         let chatboxRect = null;
+
+        // Gesture control state (MediaPipe Tasks Vision: HandLandmarker)
+        let gestureEnabled = false;
+        let gestureActiveNodeId = null;
+        let gestureHoverNodeId = null;
+        const gestureBackStack = [];
+        const gestureForwardStack = [];
+        const primaryHand = {
+            mem: {
+                lastGesture: null,
+                stableGesture: null,
+                candGesture: null,
+                candCount: 0,
+                lastPalmX: null,
+                lastPalmY: null,
+                lastTs: null,
+                lastPinch: false,
+                clearArmed: false,
+                clearArmedSince: 0,
+                pointerX: null,
+                pointerY: null,
+                openSince: 0,
+            },
+            lastPalm: null,   // {x,y} in mirrored normalized coords
+            lastSeenTs: 0,
+        };
+        let gestureLandmarker = null;
+        let gestureRenderGraph = null;
+        let gestureFetchSeq = 0;
+        let gestureLastWaveTs = 0;
+        let gesturePhysicsRaf = null;
+        let gestureTwoHandMode = false;
+        let gestureLastTwoHandTs = 0;
+        let twoHandCandidateSince = 0;
+        let twoHandLostSince = 0;
+        const TWO_HAND_MIN_SEP = 0.12;
+        const TWO_HAND_MAX_SEP = 0.85;
+        const TWO_HAND_ENTER_MS = 140;
+        const TWO_HAND_LOST_MS = 120;
+        const gestureTwoHandHoldMs = 250;
+        let lastVideoTime = -1;
+
+        // State for Two-Hand Zoom Locking
+        const zoomState = {
+            active: false,
+            startSeparation: 0,
+            startZoomLevel: 1,
+            startCenter: { x: 0, y: 0 },
+            smoothFactor: 0.15, // Lower = smoother but more laggy
+        };
+
+        // Smooth Pointer History (Moving Average)
+        const pointerHistory = [];
+        const POINTER_SMOOTHING = 5; // Average last 5 frames
+        const POINTER_HOLD_MS = 320;
+        let lastPointerTs = 0;
+        let lastPointerX = null;
+        let lastPointerY = null;
+
+        // Smooth Physics State
+        const gestureState = {
+            zoom: { current: 1, target: 1 },
+            center: { x: 0, y: 0, targetX: 0, targetY: 0 },
+            lastSep: null, // Normalized separation
+        };
+
+        // Gesture selection state (pinch-to-select cooldown)
+        const gestureSelect = {
+            hoverId: null,
+            hoverSince: 0,
+            lastSelectTs: 0,
+        };
 
         const chatbox = document.getElementById('chatbox');
         const chatLog = document.getElementById('chat-log');
@@ -602,10 +677,13 @@
         }
 
         function resetSystem() {
+            if (gestureEnabled) stopGestureControl();
+
             chatLog.innerHTML = '';
             traversalNodes.clear();
             traversalLinks.clear();
             highlightNodes.clear();
+            gestureHighlightNodes.clear();
             citationData = [];
             resetGraphToBase();
             
@@ -618,12 +696,936 @@
                 });
         }
 
+        function dist3(a, b) {
+            const dx = a.x - b.x;
+            const dy = a.y - b.y;
+            const dz = (a.z || 0) - (b.z || 0);
+            return Math.hypot(dx, dy, dz);
+        }
+
+        function lerp(start, end, factor) {
+            return start + (end - start) * factor;
+        }
+
+        function getHandScale(landmarks) {
+            const wrist = landmarks[0];
+            const middleMCP = landmarks[9];
+            if (!wrist || !middleMCP) return 0.1; // fallback
+            return Math.hypot(wrist.x - middleMCP.x, wrist.y - middleMCP.y);
+        }
+
+        function isPinched(landmarks, { threshold = 0.55 } = {}) {
+            const handScale = getHandScale(landmarks);
+            if (handScale < 0.01) return { pinched: false, ratio: 1 };
+            const thumbTip = landmarks[4];
+            const indexTip = landmarks[8];
+            if (!thumbTip || !indexTip) return { pinched: false, ratio: 1 };
+            const d = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
+            const ratio = d / handScale;
+            return { pinched: ratio < threshold, ratio };
+        }
+
+        function angleAt(a, b, c) {
+            // Returns angle ABC in radians.
+            if (!a || !b || !c) return 0;
+            const abx = a.x - b.x;
+            const aby = a.y - b.y;
+            const abz = (a.z || 0) - (b.z || 0);
+
+            const cbx = c.x - b.x;
+            const cby = c.y - b.y;
+            const cbz = (c.z || 0) - (b.z || 0);
+
+            const dot = abx * cbx + aby * cby + abz * cbz;
+            const mag1 = Math.hypot(abx, aby, abz);
+            const mag2 = Math.hypot(cbx, cby, cbz);
+            const denom = mag1 * mag2;
+            if (!Number.isFinite(denom) || denom < 1e-6) return 0;
+
+            const cos = clamp(dot / denom, -1, 1);
+            return Math.acos(cos);
+        }
+
+        function isFingerExtendedAngle(landmarks, mcp, pip, tip, { minAngle = 2.75, ratio = 1.06, minDelta = 0.018 } = {}) {
+            // Robust extension test combining joint angle + wrist-distance guard.
+            const wrist = landmarks[0];
+            const m = landmarks[mcp];
+            const p = landmarks[pip];
+            const t = landmarks[tip];
+            if (!wrist || !m || !p || !t) return false;
+
+            const ang = angleAt(m, p, t);
+            if (ang < minAngle) return false;
+
+            const pipDist = dist3(p, wrist);
+            const tipDist = dist3(t, wrist);
+            const delta = tipDist - pipDist;
+
+            return tipDist > pipDist * ratio || delta > minDelta;
+        }
+
+        function isIndexExtendedHybrid(landmarks) {
+            const wrist = landmarks[0];
+            const mcp = landmarks[5];
+            const pip = landmarks[6];
+            const tip = landmarks[8];
+            if (!wrist || !mcp || !pip || !tip) return false;
+
+            const byAngle = isFingerExtendedAngle(landmarks, 5, 6, 8, { minAngle: 2.55, ratio: 1.01, minDelta: 0.007 });
+            if (byAngle) return true;
+
+            const handScale = getHandScale(landmarks);
+            const tipDist = dist3(tip, wrist);
+            const pipDist = dist3(pip, wrist);
+            const delta = tipDist - pipDist;
+            const min = Math.max(0.006, handScale * 0.06);
+            const yCue = (tip.y < pip.y - 0.015);
+
+            return (delta > min) || yCue;
+        }
+
+        function palmCenter(landmarks) {
+            const idxs = [0, 5, 9, 13, 17];
+            let x = 0, y = 0;
+            for (const i of idxs) {
+                x += landmarks[i].x;
+                y += landmarks[i].y;
+            }
+            return { x: x / idxs.length, y: y / idxs.length };
+        }
+
+        function classifyHand(landmarks) {
+            // Angle-based extension reduces false positives when fingers are curled toward camera.
+            const indexExt = isIndexExtendedHybrid(landmarks);
+            const middleExt = isFingerExtendedAngle(landmarks, 9, 10, 12, { minAngle: 2.8, ratio: 1.08, minDelta: 0.02 });
+            const ringExt = isFingerExtendedAngle(landmarks, 13, 14, 16, { minAngle: 2.8, ratio: 1.08, minDelta: 0.02 });
+            const pinkyExt = isFingerExtendedAngle(landmarks, 17, 18, 20, { minAngle: 2.8, ratio: 1.08, minDelta: 0.02 });
+
+            const extCount = [indexExt, middleExt, ringExt, pinkyExt].filter(Boolean).length;
+
+            // Make "open" strict so pointing doesn't drift into panning.
+            const open = extCount >= 3 && middleExt;
+            const fist = extCount === 0;
+            const point = indexExt && !ringExt && !pinkyExt && extCount <= 2;
+
+            let gesture = 'other';
+            if (open) gesture = 'open';
+            else if (point) gesture = 'point';
+            else if (fist) gesture = 'fist';
+
+            const palm = palmCenter(landmarks);
+            const indexTip = landmarks[8];
+
+            return { gesture, palm, indexTip, extCount, indexExt, middleExt, ringExt, pinkyExt };
+        }
+
+        function mirroredPalmXY(hand) {
+            if (!hand?.palm) return null;
+            return { x: 1 - hand.palm.x, y: hand.palm.y };
+        }
+
+        function pickPrimaryHand(hands, now) {
+            if (!hands?.length) return null;
+
+            const withPalm = hands
+                .map(h => ({ h, p: mirroredPalmXY(h) }))
+                .filter(x => x.p);
+
+            if (primaryHand.lastPalm && withPalm.length) {
+                let best = null;
+                let bestD2 = Infinity;
+                for (const { h, p } of withPalm) {
+                    const dx = p.x - primaryHand.lastPalm.x;
+                    const dy = p.y - primaryHand.lastPalm.y;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < bestD2) { bestD2 = d2; best = h; }
+                }
+                return best || hands[0];
+            }
+
+            const pointer = hands.find(h => h.indexTip && (h.indexExt || h.gesture === 'point'));
+            return pointer || hands[0];
+        }
+
+        function landmarkToScreen(pt) {
+            // Mirror horizontally for natural interaction.
+            return {
+                x: (1 - pt.x) * window.innerWidth,
+                y: pt.y * window.innerHeight,
+            };
+        }
+
+
+        function findNearestNode(screenX, screenY) {
+            if (!Graph) return null;
+            const coords = Graph.screen2GraphCoords(screenX, screenY);
+            if (!coords) return null;
+
+            const candidates = (gestureRenderGraph && Array.isArray(gestureRenderGraph.nodes))
+                ? gestureRenderGraph.nodes
+                : graphData.nodes;
+
+            let best = null;
+            let bestD2 = Infinity;
+
+            for (const node of candidates) {
+                if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) continue;
+                const dx = node.x - coords.x;
+                const dy = node.y - coords.y;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < bestD2) {
+                    bestD2 = d2;
+                    best = node;
+                }
+            }
+
+            const k = (Graph && typeof Graph.zoom === 'function') ? (Graph.zoom() || 1) : 1;
+            // Larger threshold makes pointing usable; scales down as you zoom in.
+            const threshold = 38 / k;
+            return best && bestD2 <= threshold * threshold ? best : null;
+        }
+
+        const gestureActiveNeighborhood = new Set();
+
+        function computeGestureActiveNeighborhood(centerId) {
+            gestureActiveNeighborhood.clear();
+            if (!centerId) return;
+            const cid = String(centerId);
+            gestureActiveNeighborhood.add(cid);
+
+            const links = (graphData && Array.isArray(graphData.links)) ? graphData.links : [];
+            for (const link of links) {
+                if (!link) continue;
+                const s = typeof link.source === 'object' ? link.source.id : link.source;
+                const t = typeof link.target === 'object' ? link.target.id : link.target;
+                if (s == null || t == null) continue;
+                const sid = String(s);
+                const tid = String(t);
+                if (sid === cid) gestureActiveNeighborhood.add(tid);
+                else if (tid === cid) gestureActiveNeighborhood.add(sid);
+            }
+        }
+
+        function refreshGestureHighlights() {
+            gestureHighlightNodes.clear();
+            gestureActiveNeighborhood.forEach(id => gestureHighlightNodes.add(id));
+            if (gestureHoverNodeId) gestureHighlightNodes.add(gestureHoverNodeId);
+            if (Graph) Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+        }
+
+        function updateGestureHover(screenX, screenY) {
+            const node = findNearestNode(screenX, screenY);
+            gestureHoverNodeId = node ? node.id : null;
+            refreshGestureHighlights();
+        }
+
+        // NOTE: Neighborhood expansion via /api/neighborhood has been removed.
+        // Gesture selection now works like a click: it highlights the selected node + its 1-hop neighbors
+        // within the currently loaded graph.
+        
+
+        function stopGestureControl() {
+            gestureEnabled = false;
+            gestureFetchSeq += 1; // cancel in-flight
+            stopGesturePhysics();
+
+            gestureActiveNodeId = null;
+            gestureHoverNodeId = null;
+            gestureBackStack.length = 0;
+            gestureForwardStack.length = 0;
+            primaryHand.lastPalm = null;
+            primaryHand.lastSeenTs = 0;
+            primaryHand.mem = {
+                lastGesture: null,
+                stableGesture: null,
+                candGesture: null,
+                candCount: 0,
+                lastPalmX: null,
+                lastPalmY: null,
+                lastTs: null,
+                lastPinch: false,
+                clearArmed: false,
+                clearArmedSince: 0,
+                pointerX: null,
+                pointerY: null,
+                openSince: 0,
+            };
+            gestureRenderGraph = null;
+            gestureLastWaveTs = 0;
+            gestureHighlightNodes.clear();
+            gestureActiveNeighborhood.clear();
+            gestureTwoHandMode = false;
+            gestureLastTwoHandTs = 0;
+            twoHandCandidateSince = 0;
+            twoHandLostSince = 0;
+            gestureState.lastSep = null;
+            gestureSelect.hoverId = null;
+            gestureSelect.hoverSince = 0;
+            gestureSelect.lastSelectTs = 0;
+            zoomState.active = false;
+            pointerHistory.length = 0;
+            lastVideoTime = -1;
+            lastPointerTs = 0;
+            lastPointerX = null;
+            lastPointerY = null;
+
+            const gestureBtn = document.getElementById('gesture-btn');
+            if (gestureBtn) gestureBtn.style.color = '#fff';
+
+            const videoEl = document.getElementById('gesture-video');
+            try {
+                if (gestureLandmarker && typeof gestureLandmarker.close === 'function') {
+                    gestureLandmarker.close();
+                }
+            } catch (_) {}
+            gestureLandmarker = null;
+
+            if (videoEl && videoEl.srcObject) {
+                try {
+                    videoEl.srcObject.getTracks().forEach(t => t.stop());
+                } catch (_) {}
+                videoEl.srcObject = null;
+            }
+
+            // Restore full graph
+            if (Graph) {
+                setGraphData(normalizeGraphData({ nodes: graphData.nodes, links: graphData.links }), 'stopGestureControl');
+                if (typeof Graph.d3ReheatSimulation === 'function') Graph.d3ReheatSimulation();
+                Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+            }
+        }
+
+        function gestureClearSelection({ clearHistory = false } = {}) {
+            gestureActiveNodeId = null;
+            gestureActiveNeighborhood.clear();
+            if (clearHistory) {
+                gestureBackStack.length = 0;
+                gestureForwardStack.length = 0;
+            }
+            refreshGestureHighlights();
+        }
+
+        function gestureTraverseTo(targetId, { pushHistory = true } = {}) {
+            if (!targetId) return;
+            if (targetId === gestureActiveNodeId) return;
+            if (pushHistory && gestureActiveNodeId) {
+                gestureBackStack.push(gestureActiveNodeId);
+                gestureForwardStack.length = 0;
+            }
+            gestureActiveNodeId = targetId;
+            computeGestureActiveNeighborhood(gestureActiveNodeId);
+            refreshGestureHighlights();
+        }
+
+        function gestureTraverseBack() {
+            if (!gestureBackStack.length) return;
+            const prev = gestureBackStack.pop();
+            if (gestureActiveNodeId) gestureForwardStack.push(gestureActiveNodeId);
+            gestureActiveNodeId = prev;
+            computeGestureActiveNeighborhood(gestureActiveNodeId);
+            refreshGestureHighlights();
+        }
+
+        function gestureTraverseForward() {
+            if (!gestureForwardStack.length) return;
+            const next = gestureForwardStack.pop();
+            if (gestureActiveNodeId) gestureBackStack.push(gestureActiveNodeId);
+            gestureActiveNodeId = next;
+            computeGestureActiveNeighborhood(gestureActiveNodeId);
+            refreshGestureHighlights();
+        }
+
+        function maybeHandleWave(direction) {
+            const now = performance.now();
+            if (now - gestureLastWaveTs < 700) return;
+            gestureLastWaveTs = now;
+
+            if (direction === 'right') {
+                if (gestureHoverNodeId && gestureHoverNodeId !== gestureActiveNodeId) {
+                    gestureTraverseTo(gestureHoverNodeId, { pushHistory: true });
+                } else {
+                    gestureTraverseForward();
+                }
+            } else if (direction === 'left') {
+                gestureTraverseBack();
+            }
+        }
+
+        function startGesturePhysics() {
+            if (gesturePhysicsRaf != null) return;
+
+            const tick = () => {
+                if (!gestureEnabled || !Graph) {
+                    gesturePhysicsRaf = null;
+                    return;
+                }
+
+                // Clamp targets
+                gestureState.zoom.target = clamp(gestureState.zoom.target, 0.35, 10);
+
+                // Smooth towards targets
+                const zoomAlpha = 0.14;
+                const panAlpha = 0.18;
+
+                gestureState.zoom.current = lerp(gestureState.zoom.current, gestureState.zoom.target, zoomAlpha);
+                gestureState.center.x = lerp(gestureState.center.x, gestureState.center.targetX, panAlpha);
+                gestureState.center.y = lerp(gestureState.center.y, gestureState.center.targetY, panAlpha);
+
+                // Apply immediately (we already interpolate in this loop)
+                Graph.zoom(gestureState.zoom.current, 0);
+                Graph.centerAt(gestureState.center.x, gestureState.center.y, 0);
+
+                gesturePhysicsRaf = requestAnimationFrame(tick);
+            };
+
+            gesturePhysicsRaf = requestAnimationFrame(tick);
+        }
+
+        function stopGesturePhysics() {
+            if (gesturePhysicsRaf != null) {
+                cancelAnimationFrame(gesturePhysicsRaf);
+            }
+            gesturePhysicsRaf = null;
+        }
+
+        function handlePan(dxScreen, dyScreen) {
+            if (!Graph) return;
+            const midX = window.innerWidth / 2;
+            const midY = window.innerHeight / 2;
+            const c0 = Graph.screen2GraphCoords(midX, midY);
+            const c1 = Graph.screen2GraphCoords(midX - dxScreen, midY - dyScreen);
+            if (!c0 || !c1) return;
+
+            const dx = c0.x - c1.x;
+            const dy = c0.y - c1.y;
+
+            gestureState.center.targetX += dx;
+            gestureState.center.targetY += dy;
+        }
+
+        function handleZoom(twoHands) {
+            if (!Graph || twoHands.length < 2) return;
+            // Two-hand zoom lock: use initial separation as baseline for this zoom session.
+            const h1 = twoHands[0].landmarks;
+            const h2 = twoHands[1].landmarks;
+            const c1 = h1?.[0];
+            const c2 = h2?.[0];
+            if (!c1 || !c2) return;
+
+            const currentSep = Math.hypot(c1.x - c2.x, c1.y - c2.y);
+            const currentCenter = { x: (c1.x + c2.x) / 2, y: (c1.y + c2.y) / 2 };
+
+            if (!zoomState.active) {
+                zoomState.active = true;
+                zoomState.startSeparation = currentSep;
+                zoomState.startZoomLevel = Graph.zoom();
+                zoomState.startCenter = currentCenter;
+                return;
+            }
+
+            if (zoomState.startSeparation <= 0.01) return;
+            let ratio = currentSep / zoomState.startSeparation;
+            if (!Number.isFinite(ratio) || ratio <= 0) return;
+            if (ratio > 1) ratio = Math.pow(ratio, 0.85);
+
+            const targetZoom = clamp(zoomState.startZoomLevel * ratio, 0.35, 10);
+            gestureState.zoom.target = targetZoom;
+            gestureState.zoom.current = lerp(gestureState.zoom.current, targetZoom, zoomState.smoothFactor);
+        }
+
+        function onGestureResults(results) {
+            if (!gestureEnabled || !results) return;
+
+            const lms = results.multiHandLandmarks || [];
+            if (!lms.length) {
+                gestureTwoHandMode = false;
+                gestureLastTwoHandTs = 0;
+                gestureState.lastSep = null;
+                zoomState.active = false;
+                pointerHistory.length = 0;
+                lastPointerTs = 0;
+                lastPointerX = null;
+                lastPointerY = null;
+                primaryHand.lastPalm = null;
+                primaryHand.lastSeenTs = 0;
+                primaryHand.mem.lastPalmX = null;
+                primaryHand.mem.lastPalmY = null;
+                primaryHand.mem.lastTs = null;
+                primaryHand.mem.openSince = 0;
+                twoHandCandidateSince = 0;
+                twoHandLostSince = 0;
+                return;
+            }
+            const handed = results.multiHandedness || [];
+            const handsRaw = lms.map((landmarks, i) => {
+                const info = classifyHand(landmarks);
+                const score = handed?.[i]?.[0]?.score ?? 1;
+                return { landmarks, ...info, _i: i, score };
+            });
+
+            const hands = handsRaw.filter(h => (h.score ?? 0) >= 0.55);
+            if (!hands.length) {
+                gestureTwoHandMode = false;
+                gestureLastTwoHandTs = 0;
+                gestureState.lastSep = null;
+                zoomState.active = false;
+                pointerHistory.length = 0;
+                lastPointerTs = 0;
+                lastPointerX = null;
+                lastPointerY = null;
+                primaryHand.lastPalm = null;
+                primaryHand.lastSeenTs = 0;
+                primaryHand.mem.lastPalmX = null;
+                primaryHand.mem.lastPalmY = null;
+                primaryHand.mem.lastTs = null;
+                primaryHand.mem.openSince = 0;
+                twoHandCandidateSince = 0;
+                twoHandLostSince = 0;
+                return;
+            }
+
+            const now = performance.now();
+
+            // Choose a control hand (prefer pointer hand, else open, else first).
+            const pointerHand = hands.find(h => h.indexTip && (h.indexExt || h.gesture === 'point'));
+            const control = pickPrimaryHand(hands, now) || pointerHand || hands[0];
+            if (!control) return;
+            const pxy = mirroredPalmXY(control);
+            if (pxy) primaryHand.lastPalm = pxy;
+            primaryHand.lastSeenTs = now;
+
+            const mem = primaryHand.mem;
+
+            // Smooth gesture classification so it doesn't flip every frame.
+            const rawGesture = control.gesture;
+            if (!mem.stableGesture) {
+                mem.stableGesture = rawGesture;
+            } else if (rawGesture !== mem.stableGesture) {
+                if (mem.candGesture === rawGesture) {
+                    mem.candCount += 1;
+                } else {
+                    mem.candGesture = rawGesture;
+                    mem.candCount = 1;
+                }
+                if (mem.candCount >= 3) {
+                    mem.stableGesture = rawGesture;
+                    mem.candGesture = null;
+                    mem.candCount = 0;
+                }
+            } else {
+                mem.candGesture = null;
+                mem.candCount = 0;
+            }
+
+            control.gesture = mem.stableGesture;
+
+            // Determine if we truly have two distinct hands
+            let isTwoHand = false;
+            let twoHands = null;
+
+            if (hands.length >= 2) {
+                const sorted = hands.slice().sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+                const hA = sorted[0];
+                const hB = sorted[1];
+                const a = hA.landmarks?.[9];
+                const b = hB.landmarks?.[9];
+                if (a && b) {
+                    const sep = Math.hypot(a.x - b.x, a.y - b.y);
+                    if (sep >= TWO_HAND_MIN_SEP && sep <= TWO_HAND_MAX_SEP) {
+                        isTwoHand = true;
+                        twoHands = (a.x < b.x) ? [hA, hB] : [hB, hA];
+                    }
+                }
+            }
+
+            if (isTwoHand) {
+                if (!twoHandCandidateSince) twoHandCandidateSince = now;
+                twoHandLostSince = 0;
+            } else {
+                twoHandCandidateSince = 0;
+                if (!twoHandLostSince) twoHandLostSince = now;
+            }
+            const enterTwoHand = twoHandCandidateSince && (now - twoHandCandidateSince) > TWO_HAND_ENTER_MS;
+            const keepTwoHand = gestureTwoHandMode && (!twoHandLostSince || (now - twoHandLostSince) < TWO_HAND_LOST_MS);
+            const shouldBeTwoHand = enterTwoHand || keepTwoHand;
+
+            // Latch entry/exit so we can freeze the view once and avoid drift.
+            if (shouldBeTwoHand && !gestureTwoHandMode) {
+                gestureTwoHandMode = true;
+                gestureState.lastSep = null; // reset zoom baseline
+                zoomState.active = false;
+                pointerHistory.length = 0;
+                lastPointerTs = 0;
+                lastPointerX = null;
+                lastPointerY = null;
+
+                // Freeze pan/center ONCE on entry so zoom is strictly zoom-only.
+                if (Graph && typeof Graph.screen2GraphCoords === 'function') {
+                    const c = Graph.screen2GraphCoords(window.innerWidth / 2, window.innerHeight / 2);
+                    if (c && Number.isFinite(c.x) && Number.isFinite(c.y)) {
+                        gestureState.center.x = c.x;
+                        gestureState.center.y = c.y;
+                        gestureState.center.targetX = c.x;
+                        gestureState.center.targetY = c.y;
+                    }
+                }
+
+                gestureHoverNodeId = null;
+                refreshGestureHighlights();
+            } else if (!shouldBeTwoHand && gestureTwoHandMode) {
+                gestureTwoHandMode = false;
+                gestureState.lastSep = null; // reset for next two-hand session
+                zoomState.active = false;
+
+                // Avoid huge palm-velocity deltas when returning to one-hand mode
+                mem.lastPalmX = null;
+                mem.lastPalmY = null;
+                mem.lastTs = null;
+            }
+
+            // If two hands are visible, treat the mode as zoom-only.
+            // Don't depend on gesture classification here — when two hands are detected,
+            // always treat it as two-hand zoom mode for reliability.
+            if (gestureTwoHandMode) {
+                if (twoHands) handleZoom(twoHands);
+
+                mem.lastGesture = control.gesture;
+                return;
+            }
+
+            // Pointer hover (smoothed) — only in one-hand mode
+            const hoverSource = pointerHand || control;
+            const hasPointer = hoverSource && hoverSource.indexTip && (hoverSource.indexExt || hoverSource.gesture === 'point');
+            if (hasPointer) {
+                const pRaw = landmarkToScreen(hoverSource.indexTip);
+                pointerHistory.push({ x: pRaw.x, y: pRaw.y });
+                if (pointerHistory.length > POINTER_SMOOTHING) pointerHistory.shift();
+                let avgX = 0, avgY = 0;
+                for (const p of pointerHistory) { avgX += p.x; avgY += p.y; }
+                avgX /= pointerHistory.length;
+                avgY /= pointerHistory.length;
+                if (mem.pointerX == null || mem.pointerY == null) {
+                    mem.pointerX = avgX;
+                    mem.pointerY = avgY;
+                } else {
+                    mem.pointerX = lerp(mem.pointerX, avgX, 0.35);
+                    mem.pointerY = lerp(mem.pointerY, avgY, 0.35);
+                }
+                lastPointerTs = now;
+                lastPointerX = mem.pointerX;
+                lastPointerY = mem.pointerY;
+                updateGestureHover(mem.pointerX, mem.pointerY);
+            } else if (lastPointerTs && (now - lastPointerTs) < POINTER_HOLD_MS && lastPointerX != null && lastPointerY != null) {
+                if (mem.pointerX == null || mem.pointerY == null) {
+                    mem.pointerX = lastPointerX;
+                    mem.pointerY = lastPointerY;
+                } else {
+                    mem.pointerX = lerp(mem.pointerX, lastPointerX, 0.2);
+                    mem.pointerY = lerp(mem.pointerY, lastPointerY, 0.2);
+                }
+                updateGestureHover(mem.pointerX, mem.pointerY);
+            }
+
+            // One-hand mode:
+            // - OPEN (strict) => pan/wave
+            // - POINT => hover
+            // - PINCH => select hovered node (highlights 1-hop neighbors locally)
+
+            // Wave/pan based on open palm motion (require fully open hand to avoid drift while pointing)
+            if (control.palm) {
+                const palmX = 1 - control.palm.x; // mirrored
+                const palmY = control.palm.y;
+                if (mem.lastPalmX != null && mem.lastPalmY != null && mem.lastTs != null) {
+                    const dt = now - mem.lastTs;
+                    if (dt < 14 || dt > 250) {
+                        mem.lastPalmX = palmX;
+                        mem.lastPalmY = palmY;
+                        mem.lastTs = now;
+                    } else {
+                        const dtSec = dt / 1000;
+                        const filt = 0.35;
+                        const fx = lerp(mem.lastPalmX, palmX, filt);
+                        const fy = lerp(mem.lastPalmY, palmY, filt);
+
+                        const vx = (fx - mem.lastPalmX) / dtSec;
+                        const vy = (fy - mem.lastPalmY) / dtSec;
+
+                        const fullyOpen = control.gesture === 'open' && (control.extCount || 0) >= 4;
+                        if (fullyOpen) {
+                            if (!mem.openSince) mem.openSince = now;
+                        } else {
+                            mem.openSince = 0;
+                        }
+                        const openStable = mem.openSince && (now - mem.openSince) > 120;
+
+                        const vxC = clamp(vx, -3.0, 3.0);
+                        const vyC = clamp(vy, -3.0, 3.0);
+
+                        if (openStable && Math.abs(vxC) > 1.25 && Math.abs(vxC) > Math.abs(vyC) * 1.35) {
+                            maybeHandleWave(vxC > 0 ? 'right' : 'left');
+                        } else if (openStable) {
+                            const dx = (fx - mem.lastPalmX) * window.innerWidth;
+                            const dy = (fy - mem.lastPalmY) * window.innerHeight;
+                            if (Math.hypot(dx, dy) > 3) handlePan(dx, dy);
+                        }
+
+                        mem.lastPalmX = fx;
+                        mem.lastPalmY = fy;
+                        mem.lastTs = now;
+                    }
+                } else {
+                    mem.lastPalmX = palmX;
+                    mem.lastPalmY = palmY;
+                    mem.lastTs = now;
+                }
+            }
+
+            // Pinch-to-select (prevents accidental triggers from passive pointing)
+            // Selects the hovered node and highlights its 1-hop neighborhood within the current graph.
+            //
+            // Unpinch-to-deselect:
+            // - Pinch on empty space (no hovered node) arms a clear.
+            // - Releasing (unpinch) then clears the selected neighborhood (like a background click).
+            const pinch = isPinched(control.landmarks);
+            const wasPinched = !!mem.lastPinch;
+            const pointBias = control.gesture === 'point' || (control.indexExt && (control.extCount || 0) <= 2);
+            const pinchDownThreshold = pointBias ? 0.34 : 0.48;
+            const pinchUpThreshold = pointBias ? 0.42 : 0.58;
+            const pinchedNow = wasPinched ? (pinch.ratio < pinchUpThreshold) : (pinch.ratio < pinchDownThreshold);
+            const pinchDown = !wasPinched && pinchedNow;
+            const pinchUp = wasPinched && !pinchedNow;
+            mem.lastPinch = pinchedNow;
+
+            // If we drift onto a different node while holding a "clear" pinch, disarm to avoid accidental clears.
+            if (mem.clearArmed && pinchedNow && gestureHoverNodeId && (!gestureActiveNodeId || gestureHoverNodeId !== gestureActiveNodeId)) {
+                mem.clearArmed = false;
+                mem.clearArmedSince = 0;
+            }
+
+            const canSelect = (now - (gestureSelect.lastSelectTs || 0)) > 900;
+            if (pinchDown) {
+                if (gestureActiveNodeId && gestureHoverNodeId && gestureHoverNodeId === gestureActiveNodeId) {
+                    // Pinch on the already-selected node to arm a deselect on release.
+                    mem.clearArmed = true;
+                    mem.clearArmedSince = now;
+                } else if (canSelect && gestureHoverNodeId) {
+                    mem.clearArmed = false;
+                    mem.clearArmedSince = 0;
+                    gestureSelect.lastSelectTs = now;
+                    gestureTraverseTo(gestureHoverNodeId, { pushHistory: true });
+                } else if (!gestureHoverNodeId && gestureActiveNodeId) {
+                    // Pinch on empty space to "arm" a deselect on release.
+                    mem.clearArmed = true;
+                    mem.clearArmedSince = now;
+                }
+            }
+
+            if (pinchUp && mem.clearArmed) {
+                mem.clearArmed = false;
+                mem.clearArmedSince = 0;
+                gestureClearSelection({ clearHistory: false });
+            }
+
+            // NOTE: Hop radius changes are disabled for now (they were too easy to trigger accidentally).
+
+            mem.lastGesture = control.gesture;
+        }
+
+        async function startGestureControl() {
+            if (gestureEnabled) return;
+
+            const videoEl = document.getElementById('gesture-video');
+            if (!videoEl) {
+                console.error('gesture video element missing');
+                return;
+            }
+
+            if (!window.isSecureContext) {
+                appendLine('system', 'Camera requires a secure context. Open this page via http://localhost:3000 (not 0.0.0.0) or use HTTPS.');
+                return;
+            }
+
+            appendLine('system', 'Hand gestures enabled — allow camera access.');
+
+            gestureEnabled = true;
+            gestureActiveNodeId = null;
+            gestureHoverNodeId = null;
+            gestureBackStack.length = 0;
+            gestureForwardStack.length = 0;
+            primaryHand.lastPalm = null;
+            primaryHand.lastSeenTs = 0;
+            primaryHand.mem = {
+                lastGesture: null,
+                stableGesture: null,
+                candGesture: null,
+                candCount: 0,
+                lastPalmX: null,
+                lastPalmY: null,
+                lastTs: null,
+                lastPinch: false,
+                clearArmed: false,
+                clearArmedSince: 0,
+                pointerX: null,
+                pointerY: null,
+                openSince: 0,
+            };
+            gestureRenderGraph = Graph;
+            gestureLastWaveTs = 0;
+            refreshGestureHighlights();
+            gestureTwoHandMode = false;
+            gestureLastTwoHandTs = 0;
+            twoHandCandidateSince = 0;
+            twoHandLostSince = 0;
+            gestureState.lastSep = null;
+            gestureSelect.hoverId = null;
+            gestureSelect.hoverSince = 0;
+            gestureSelect.lastSelectTs = 0;
+            zoomState.active = false;
+            pointerHistory.length = 0;
+            lastVideoTime = -1;
+            lastPointerTs = 0;
+            lastPointerX = null;
+            lastPointerY = null;
+
+            const gestureBtn = document.getElementById('gesture-btn');
+            if (gestureBtn) gestureBtn.style.color = '#00ff8a';
+
+            // Initialize Physics State
+            if (Graph) {
+                const k = Graph.zoom();
+                const center = Graph.screen2GraphCoords(window.innerWidth / 2, window.innerHeight / 2) || { x: 0, y: 0 };
+                gestureState.zoom.current = k;
+                gestureState.zoom.target = k;
+                gestureState.center.x = center.x;
+                gestureState.center.targetX = center.x;
+                gestureState.center.y = center.y;
+                gestureState.center.targetY = center.y;
+                gestureState.lastSep = null;
+            }
+
+            startGesturePhysics();
+
+            // Explicitly request camera permission
+            let stream;
+            try {
+                if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+                    throw new Error('getUserMedia not supported');
+                }
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'user',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                    },
+                    audio: false,
+                });
+                videoEl.srcObject = stream;
+                await videoEl.play();
+                appendLine('system', 'Camera started.');
+            } catch (err) {
+                console.error('getUserMedia failed', err);
+                const name = err && err.name ? err.name : 'Error';
+                if (name === 'NotAllowedError' || name === 'SecurityError') {
+                    appendLine('system', 'Camera blocked. Allow camera access in your browser site settings and try again.');
+                } else if (name === 'NotFoundError') {
+                    appendLine('system', 'No camera device found.');
+                } else {
+                    appendLine('system', 'Camera failed to start.');
+                }
+                stopGestureControl();
+                return;
+            }
+
+            // Initialize MediaPipe Tasks Vision HandLandmarker (matches Trinkets/HandSphereThreeJs)
+            let FilesetResolver, HandLandmarker;
+            try {
+                ({ FilesetResolver, HandLandmarker } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm'));
+            } catch (err) {
+                console.error('tasks-vision import failed', err);
+                appendLine('system', 'Failed to load MediaPipe Tasks Vision. Check your internet connection and try again.');
+                stopGestureControl();
+                return;
+            }
+
+            let vision;
+            try {
+                vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm');
+            } catch (err) {
+                console.error('forVisionTasks failed', err);
+                appendLine('system', 'Failed to initialize MediaPipe vision runtime.');
+                stopGestureControl();
+                return;
+            }
+
+            try {
+                gestureLandmarker = await HandLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+                        delegate: 'GPU',
+                    },
+                    runningMode: 'VIDEO',
+                    numHands: 2,
+                });
+            } catch (err) {
+                console.error('HandLandmarker init failed (GPU). Retrying with CPU...', err);
+                try {
+                    gestureLandmarker = await HandLandmarker.createFromOptions(vision, {
+                        baseOptions: {
+                            modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+                            delegate: 'CPU',
+                        },
+                        runningMode: 'VIDEO',
+                        numHands: 2,
+                    });
+                } catch (err2) {
+                    console.error('HandLandmarker init failed (CPU)', err2);
+                    appendLine('system', 'Failed to initialize HandLandmarker.');
+                    stopGestureControl();
+                    return;
+                }
+            }
+
+            const pump = () => {
+                if (!gestureEnabled || !gestureLandmarker || !videoEl || !videoEl.srcObject) return;
+                try {
+                    const now = performance.now();
+                    const videoTime = videoEl.currentTime;
+                    if (videoTime === lastVideoTime) {
+                        requestAnimationFrame(pump);
+                        return;
+                    }
+                    lastVideoTime = videoTime;
+                    const r = (typeof gestureLandmarker.detectForVideo === 'function')
+                        ? gestureLandmarker.detectForVideo(videoEl, now)
+                        : gestureLandmarker.detect(videoEl);
+
+                    const mpLike = {
+                        multiHandLandmarks: r?.landmarks || [],
+                        multiHandedness: r?.handednesses || r?.handedness || [],
+                    };
+                    onGestureResults(mpLike);
+                } catch (err) {
+                    console.error('HandLandmarker detect failed', err);
+                    // Keep pumping; transient errors happen during camera warmup/background tab.
+                }
+                requestAnimationFrame(pump);
+            };
+            requestAnimationFrame(pump);
+        }
+
         const gestureBtn = document.getElementById('gesture-btn');
         if (gestureBtn) {
-            gestureBtn.addEventListener('click', (e) => {
+            gestureBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                // Placeholder: gesture control wiring comes later
-                console.log('Hand gesture control: TODO');
+                if (gestureEnabled) {
+                    stopGestureControl();
+                    return;
+                }
+
+                const ok = confirm('Enable camera for hand gesture control?');
+                if (!ok) return;
+
+                await startGestureControl();
             });
         }
 
@@ -738,11 +1740,86 @@
                 }
             });
 
-            Graph.graphData({
-                nodes: graphData.nodes,
-                links: graphData.links
-            });
+            setGraphData(normalizeGraphData({ nodes: graphData.nodes, links: graphData.links }), 'processTraversal');
             Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+        }
+
+        function setGraphData(data, from) {
+            // Debugging illegal string nodes
+            const badNodes = (data.nodes || []).filter(n => typeof n !== 'object');
+            if (badNodes.length > 0) {
+                console.error(`[${from}] BAD DATA: found ${badNodes.length} string nodes!`, badNodes, data);
+                // As a fallback, filter them out to prevent a crash
+                data.nodes = data.nodes.filter(n => typeof n === 'object');
+            }
+            Graph.graphData(data);
+        }
+
+        function normalizeGraphData(data, { assumeBase = false } = {}) {
+            const nodesIn = (data && Array.isArray(data.nodes)) ? data.nodes : [];
+            const linksIn = (data && Array.isArray(data.links)) ? data.links : [];
+
+            const nodes = [];
+            const byId = new Map();
+
+            const addNode = (n) => {
+                if (n && typeof n === 'object') {
+                    const id = n.id != null ? String(n.id) : null;
+                    if (!id) return;
+                    const node = {
+                        neighbors: [],
+                        val: n.val ?? Math.max(2, 2 + Math.sqrt(n.degree || 0)),
+                        isBase: assumeBase ? true : !!n.isBase,
+                        _dynamic: n._dynamic ?? !assumeBase,
+                        ...n,
+                        id,
+                        label: n.label || id,
+                    };
+                    byId.set(id, node);
+                    nodes.push(node);
+                    return;
+                }
+
+                const id = n != null ? String(n) : null;
+                if (!id) return;
+                if (byId.has(id)) return;
+                const node = {
+                    id,
+                    label: id,
+                    val: 1,
+                    neighbors: [],
+                    _dynamic: true,
+                    isBase: assumeBase,
+                };
+                byId.set(id, node);
+                nodes.push(node);
+            };
+
+            nodesIn.forEach(addNode);
+
+            const links = [];
+            linksIn.forEach(l => {
+                if (!l || typeof l !== 'object') return;
+
+                const s = typeof l.source === 'object' ? l.source?.id : l.source;
+                const t = typeof l.target === 'object' ? l.target?.id : l.target;
+                if (s == null || t == null) return;
+
+                const sid = String(s);
+                const tid = String(t);
+
+                // Ensure endpoints exist as node objects (prevents implicit string nodes in force-graph)
+                if (!byId.has(sid)) addNode(sid);
+                if (!byId.has(tid)) addNode(tid);
+
+                links.push({
+                    ...l,
+                    source: sid,
+                    target: tid,
+                });
+            });
+
+            return { nodes, links };
         }
 
         function ensureNode(id) {
@@ -783,7 +1860,7 @@
                 }
             });
 
-            Graph.graphData(graphData);
+            setGraphData(normalizeGraphData(graphData), 'resetGraphToBase');
             Graph.nodeCanvasObject(Graph.nodeCanvasObject());
         }
 
@@ -910,7 +1987,7 @@
                     const fontSize = baseFont / globalScale;
                     ctx.font = `${fontSize}px "VT323", monospace`;
 
-                    const isActive = highlightNodes.has(node.id) || traversalNodes.has(node.id);
+                    const isActive = highlightNodes.has(node.id) || traversalNodes.has(node.id) || gestureHighlightNodes.has(node.id);
                     const strokeColor = isActive ? '#00ff8a' : '#ffffff';
 
                     // Octagon Logic: intersection of box and rotated box (sum of abs)
@@ -992,7 +2069,8 @@
                     const cpY = snap(midY + ny * dist * curvature);
 
                     const isTraversal = traversalLinks.has(`${start.id}-${end.id}`) || traversalLinks.has(`${end.id}-${start.id}`);
-                    const isHighlight = highlightNodes.has(start.id) && highlightNodes.has(end.id);
+                    const isHighlight = (highlightNodes.has(start.id) && highlightNodes.has(end.id)) ||
+                        (gestureHighlightNodes.has(start.id) && gestureHighlightNodes.has(end.id));
                     const isActive = isTraversal || isHighlight;
 
                     ctx.beginPath();
@@ -1126,11 +2204,7 @@
                 const connectedNodeIds = new Set(connectedFinalNodes.map(n => n.id));
                 const connectedFinalLinks = finalLinks.filter(link => connectedNodeIds.has(link.source) && connectedNodeIds.has(link.target));
 
-                graphData = { nodes: connectedFinalNodes, links: connectedFinalLinks };
-
-                // Mark this as the base (initial) graph state so we can reset between queries
-                graphData.nodes.forEach(n => { n.isBase = true; });
-                graphData.links.forEach(l => { l.isBase = true; });
+                graphData = normalizeGraphData({ nodes: connectedFinalNodes, links: connectedFinalLinks }, { assumeBase: true });
 
                 nodesById = Object.fromEntries(graphData.nodes.map(n => [n.id, n]));
 
@@ -1144,7 +2218,7 @@
                     }
                 });
 
-                Graph.graphData(graphData);
+                setGraphData(graphData, 'loadGraph');
                 document.getElementById('loading').style.display = 'none';
                 bootSequence();
             } catch (err) {
@@ -1178,6 +2252,13 @@
             const pad = 25 / k; // Padding in graph units
 
             graphData.nodes.forEach(node => {
+                if (!node || typeof node !== 'object') return;
+                if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
+
+                // Ensure velocity fields exist
+                if (!Number.isFinite(node.vx)) node.vx = 0;
+                if (!Number.isFinite(node.vy)) node.vy = 0;
+
                 const dx = node.x - midX;
                 const dy = node.y - midY;
                 const adx = Math.abs(dx);
@@ -1192,7 +2273,7 @@
                     if (overlapX < overlapY) {
                         const sign = dx > 0 ? 1 : -1;
                         node.vx += sign * strength;
-                        node.x += sign * (strength * 0.1); 
+                        node.x += sign * (strength * 0.1);
                     } else {
                         const sign = dy > 0 ? 1 : -1;
                         node.vy += sign * strength;
