@@ -81,10 +81,10 @@
             z-index: -1;
             /* Stepped pixel corner (missing 4px block) */
             clip-path: polygon(
-                4px 0, calc(100% - 4px) 0, 
-                calc(100% - 4px) 4px, 100% 4px, 
+                4px 0, calc(100% - 4px) 0,
+                calc(100% - 4px) 4px, 100% 4px,
                 100% calc(100% - 4px), calc(100% - 4px) calc(100% - 4px),
-                calc(100% - 4px) 100%, 4px 100%, 
+                calc(100% - 4px) 100%, 4px 100%,
                 4px calc(100% - 4px), 0 calc(100% - 4px),
                 0 4px, 4px 4px
             );
@@ -100,10 +100,10 @@
             z-index: -1;
             /* Match the stepped corner */
             clip-path: polygon(
-                4px 0, calc(100% - 4px) 0, 
-                calc(100% - 4px) 4px, 100% 4px, 
+                4px 0, calc(100% - 4px) 0,
+                calc(100% - 4px) 4px, 100% 4px,
                 100% calc(100% - 4px), calc(100% - 4px) calc(100% - 4px),
-                calc(100% - 4px) 100%, 4px 100%, 
+                calc(100% - 4px) 100%, 4px 100%,
                 4px calc(100% - 4px), 0 calc(100% - 4px),
                 0 4px, 4px 4px
             );
@@ -614,7 +614,7 @@
             const val = promptInput.value;
             const start = promptInput.selectionStart;
             const end = promptInput.selectionEnd;
-            
+
             // Handle simple case: insertion caret
             let html = '';
             if (start === end) {
@@ -629,7 +629,7 @@
                 html = escapeHtml(before) + `<span style="background:#fff;color:#000">${escapeHtml(sel)}</span>` + escapeHtml(after);
             }
             promptDisplay.innerHTML = html;
-            
+
             // Sync scroll
             promptDisplay.scrollLeft = promptInput.scrollLeft;
         }
@@ -696,7 +696,7 @@
             citationStore.clear();
             citationAnswerSeq = 0;
             resetGraphToBase();
-            
+
             // Call backend reset
             fetch(`${API_BASE}/api/agent/reset`, { method: 'POST' })
                 .then(() => bootSequence())
@@ -932,7 +932,7 @@
         // NOTE: Neighborhood expansion via /api/neighborhood has been removed.
         // Gesture selection now works like a click: it highlights the selected node + its 1-hop neighbors
         // within the currently loaded graph.
-        
+
 
         function stopGestureControl() {
             gestureEnabled = false;
@@ -1455,7 +1455,7 @@
                 return;
             }
 
-            appendLine('system', 'Hand gestures enabled — allow camera access.');
+            appendLine('system', 'Allow camera access for hand gestures.');
 
             gestureEnabled = true;
             gestureActiveNodeId = null;
@@ -1531,7 +1531,7 @@
                 });
                 videoEl.srcObject = stream;
                 await videoEl.play();
-                appendLine('system', 'Camera started.');
+                appendLine('system', 'Camera enabled. Gestures:\n• Point to hover nodes\n• Pinch to select (pinch on empty space, then release to clear)\n• Open palm to pan; left/right/up/down\n• Two hands to zoom');
             } catch (err) {
                 console.error('getUserMedia failed', err);
                 const name = err && err.name ? err.name : 'Error';
@@ -2021,7 +2021,7 @@
                 .nodeCanvasObject((node, ctx, globalScale) => {
                     ctx.globalAlpha = 1.0;
                     ctx.imageSmoothingEnabled = false;
-                    const pixelSize = 2; 
+                    const pixelSize = 2;
                     const snap = v => Math.round(v / pixelSize) * pixelSize;
                     const x = snap(node.x);
                     const y = snap(node.y);
@@ -2029,7 +2029,7 @@
                     // Radius based on value
                     const rRaw = Math.max(8, 8 + Math.sqrt(node.val || 0));
                     const r = Math.round(rRaw / pixelSize) * pixelSize;
-                    
+
                     const label = node.label || node.id;
                     const baseFont = Math.max(9, Math.min(18, r * 2.5));
                     const fontSize = baseFont / globalScale;
@@ -2042,7 +2042,7 @@
                     // box: max(|dx|, |dy|) <= r
                     // diamond: |dx| + |dy| <= r * 1.4
                     const limit = r * 1.4;
-                    const innerR = Math.max(0, r - pixelSize); 
+                    const innerR = Math.max(0, r - pixelSize);
                     const innerLimit = innerR * 1.4;
 
                     // Solid fill to ensure opacity (prevents sub-pixel translucency artifacts)
@@ -2296,7 +2296,7 @@
             const halfW = (maxX - minX) / 2;
             const halfH = (maxY - minY) / 2;
 
-            const k = Graph.zoom(); 
+            const k = Graph.zoom();
             const pad = 25 / k; // Padding in graph units
 
             graphData.nodes.forEach(node => {
@@ -2356,13 +2356,13 @@
             };
 
             dragHandle.addEventListener('pointerdown', e => {
-                // Allow dragging from header or the box border/background itself, 
+                // Allow dragging from header or the box border/background itself,
                 // but NOT from text selection areas or inputs
                 const target = e.target;
                 const isInput = target.tagName === 'INPUT' || target.closest('input');
                 const isLog = target.closest('#chat-log');
                 const isLink = target.closest('a') || target.closest('button') || target.closest('.citation-ref');
-                
+
                 // If clicking log, input, interactive elements, or the reset button, don't drag
                 if (isInput || isLog || isLink || target.closest('#reset-btn')) return;
 
@@ -2370,7 +2370,7 @@
                 const rect = chatbox.getBoundingClientRect();
                 offsetX = e.clientX - rect.left; // relative to box
                 offsetY = e.clientY - rect.top;
-                
+
                 chatbox.classList.add('dragging');
                 dragHandle.setPointerCapture(pointerId);
                 if (Graph && typeof Graph.d3ReheatSimulation === 'function') Graph.d3ReheatSimulation(); // Wake up
