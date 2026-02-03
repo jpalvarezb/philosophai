@@ -487,6 +487,107 @@ class EntityCanonicalizer:
             print(f'   "{canon}" ← {variants[:5]}')
         
         return {"original": len(entities), "canonical": len(unique_canons), "merged": merged}
+    def dedupe_subject_object_pairs(
+        self,
+        table: str = "normalized_triples_clean_canon",
+    ) -> dict:
+        """
+        Keep only the highest-support predicate per (subject, object) pair.
+
+        Support = row count for that subject/object/predicate. Ties break
+        lexicographically on predicate_canon_id for determinism.
+        """
+        con = self.storage.con
+        print("\n" + "=" * 60)
+        print("DEDUP SUBJECT–OBJECT PAIRS")
+        print("=" * 60)
+
+        try:
+            before_rows = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            before_pairs = con.execute(
+                f"""
+                SELECT COUNT(*) FROM (
+                    SELECT subject_canon_id, object_canon_id
+                    FROM {table}
+                    WHERE object_canon_id IS NOT NULL AND object_canon_id != ''
+                    GROUP BY 1, 2
+                )
+                """
+            ).fetchone()[0]
+        except Exception as e:
+            print(f"❌ Could not read from {table}: {e}")
+            return {"deduped": False, "error": str(e)}
+
+        con.execute(
+            f"""
+            CREATE OR REPLACE TABLE {table} AS
+            WITH pred_support AS (
+                SELECT
+                    subject_canon_id,
+                    object_canon_id,
+                    predicate_canon_id,
+                    COUNT(*) AS support
+                FROM {table}
+                WHERE object_canon_id IS NOT NULL AND object_canon_id != ''
+                GROUP BY 1, 2, 3
+            ),
+            ranked AS (
+                SELECT
+                    t.*,
+                    ps.support,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY t.subject_canon_id, t.object_canon_id
+                        ORDER BY ps.support DESC NULLS LAST, t.predicate_canon_id
+                    ) AS pred_rank
+                FROM {table} t
+                LEFT JOIN pred_support ps
+                  ON t.subject_canon_id = ps.subject_canon_id
+                 AND t.object_canon_id = ps.object_canon_id
+                 AND t.predicate_canon_id = ps.predicate_canon_id
+            )
+            SELECT * EXCLUDE(pred_rank, support)
+            FROM ranked
+            WHERE (object_canon_id IS NULL OR object_canon_id = '' OR pred_rank = 1)
+            """
+        )
+
+        after_rows = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        after_pairs = con.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT subject_canon_id, object_canon_id
+                FROM {table}
+                WHERE object_canon_id IS NOT NULL AND object_canon_id != ''
+                GROUP BY 1, 2
+            )
+            """
+        ).fetchone()[0]
+
+        removed_rows = before_rows - after_rows
+        multi_pairs_removed = con.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT subject_canon_id, object_canon_id
+                FROM {table}
+                WHERE object_canon_id IS NOT NULL AND object_canon_id != ''
+                GROUP BY 1, 2
+                HAVING COUNT(DISTINCT predicate_canon_id) > 1
+            )
+            """
+        ).fetchone()[0]
+
+        print(f"Rows: {before_rows:,} → {after_rows:,} (removed {removed_rows:,})")
+        print(f"Subject–object pairs: {before_pairs:,} → {after_pairs:,}")
+        print(f"Pairs with >1 predicate remaining: {multi_pairs_removed:,}")
+
+        return {
+            "deduped": True,
+            "before_rows": before_rows,
+            "after_rows": after_rows,
+            "removed_rows": removed_rows,
+            "pairs": after_pairs,
+            "multi_pred_pairs_remaining": multi_pairs_removed,
+        }
 
     def canonicalize_all(
         self,
@@ -521,6 +622,10 @@ class EntityCanonicalizer:
         sem_stats = self.canonicalize_entities_semantic(
             target_table, similarity_threshold=entity_threshold
         )
+
+        # Step 4: Deduplicate subject-object pairs to a single predicate
+        print("\n--- Step 4: Deduplicate Subject/Object Pairs ---")
+        dedup_stats = self.dedupe_subject_object_pairs(target_table)
         
         # Final edge weight distribution
         con = self.storage.con
@@ -550,4 +655,5 @@ class EntityCanonicalizer:
             "entity_lemmatization": entity_stats,
             "predicate_canonicalization": pred_stats,
             "semantic_entity_merging": sem_stats,
+            "dedup": dedup_stats,
         }

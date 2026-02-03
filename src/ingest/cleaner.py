@@ -5,6 +5,24 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..storage import DuckDBStorage
+# Keep only alphabetical tokens and reasonable lengths
+ALPHA_FILTER_SQL = """
+    -- Require alphabetic (allow spaces/hyphens) for subject/predicate/object
+    subject_norm ~ '^[A-Za-z][A-Za-z \\-]*$'
+    AND predicate_norm ~ '^[A-Za-z][A-Za-z \\-]*$'
+    AND (
+        object_norm IS NULL
+        OR object_norm = ''
+        OR object_norm ~ '^[A-Za-z][A-Za-z \\-]*$'
+    )
+    -- Require subject/object length > 1 (after trimming); allow empty object for unary facts
+    AND LENGTH(TRIM(subject_norm)) > 1
+    AND (
+        object_norm IS NULL
+        OR object_norm = ''
+        OR LENGTH(TRIM(object_norm)) > 1
+    )
+"""
 
 
 # Filter patterns for Project Gutenberg and other metadata noise
@@ -237,8 +255,38 @@ class TripleCleaner:
         con.execute(f"DROP TABLE IF EXISTS {target_table}")
         con.execute(f"""
             CREATE TABLE {target_table} AS
-            SELECT * FROM {source_table}
-            WHERE NOT ({NOISE_FILTER_SQL})
+            WITH filtered AS (
+                SELECT * FROM {source_table}
+                WHERE NOT ({NOISE_FILTER_SQL})
+                  AND ({ALPHA_FILTER_SQL})
+            ),
+            pred_support AS (
+                SELECT
+                    subject_norm,
+                    object_norm,
+                    predicate_norm,
+                    COUNT(*) AS support
+                FROM filtered
+                WHERE object_norm IS NOT NULL AND object_norm != ''
+                GROUP BY 1, 2, 3
+            ),
+            ranked AS (
+                SELECT
+                    f.*,
+                    ps.support,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY f.subject_norm, f.object_norm
+                        ORDER BY ps.support DESC NULLS LAST, f.predicate_norm
+                    ) AS pred_rank
+                FROM filtered f
+                LEFT JOIN pred_support ps
+                  ON f.subject_norm = ps.subject_norm
+                 AND f.object_norm = ps.object_norm
+                 AND f.predicate_norm = ps.predicate_norm
+            )
+            SELECT * EXCLUDE(pred_rank, support)
+            FROM ranked
+            WHERE (object_norm IS NULL OR object_norm = '' OR pred_rank = 1)
         """)
         
         # Count after
