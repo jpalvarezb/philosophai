@@ -37,6 +37,9 @@ class CitationBuilder:
         chunks = self.storage.get_chunk_texts(chunk_ids)
         chunk_map = {c[0]: c[1] for c in chunks}
 
+        # Map chunk -> provenance metadata (author/title/tradition)
+        provenance = self.storage.get_chunk_provenance(chunk_ids)
+
         # Get entity associations for each chunk
         chunk_entities = self._get_chunk_entities(chunk_ids)
 
@@ -44,6 +47,10 @@ class CitationBuilder:
         for idx, chunk_id in enumerate(chunk_ids, start=1):
             content = chunk_map.get(chunk_id, "")
             entities = chunk_entities.get(chunk_id, [])
+            meta = provenance.get(chunk_id) or provenance.get(str(chunk_id)) or {}
+            author = meta.get("author")
+            title = meta.get("title")
+            tradition = meta.get("tradition")
 
             # Find community for this chunk (use first entity's community)
             community_id = None
@@ -59,6 +66,10 @@ class CitationBuilder:
                     chunk_content=content,
                     community_id=community_id,
                     node_ids=entities,
+                    author=author,
+                    work=title,
+                    title=title,
+                    tradition=tradition,
                 )
             )
 

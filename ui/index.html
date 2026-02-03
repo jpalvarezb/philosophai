@@ -326,22 +326,102 @@
             border: 1px solid #fff;
             padding: 10px;
             border-radius: 4px;
-            max-width: 320px;
+            max-width: 360px;
             font-size: 12px;
             color: #ddd;
             display: none;
             z-index: 100;
-            pointer-events: none;
+            pointer-events: auto; /* allow click-to-expand */
+            user-select: text;
             image-rendering: pixelated;
             -webkit-font-smoothing: none;
+        }
+
+        #citation-tooltip .citation-tooltip-header {
+            color: #fff;
+            margin-bottom: 6px;
+            letter-spacing: 0.04em;
+        }
+
+        #citation-tooltip .citation-tooltip-meta {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 2px 10px;
+            margin-bottom: 8px;
+            color: rgba(255, 255, 255, 0.85);
+        }
+        #citation-tooltip .citation-tooltip-k {
+            color: rgba(255, 255, 255, 0.6);
+            white-space: nowrap;
+        }
+        #citation-tooltip .citation-tooltip-v {
+            color: rgba(255, 255, 255, 0.92);
+            overflow-wrap: anywhere;
+        }
+
+        #citation-tooltip .citation-tooltip-snippet {
+            color: #ddd;
+            line-height: 1.25;
+            max-height: 120px;
+            overflow: hidden;
+        }
+        #citation-tooltip.expanded .citation-tooltip-snippet {
+            max-height: 280px;
+            overflow: auto;
+        }
+
+        #citation-tooltip .citation-tooltip-hint {
+            margin-top: 10px;
+            display: inline-block;
+            padding: 4px 8px;
+            font-size: 11px;
+            letter-spacing: 0.04em;
+            cursor: pointer;
+            border: 2px solid #fff;
+            /* slightly "pixel" feel */
+            box-shadow: 2px 2px 0 0 #fff;
+            user-select: none;
+        }
+
+        /* When collapsed: hint says "expand".
+           Default = white outline + white text.
+           Hover = filled white + black text. */
+        #citation-tooltip .citation-tooltip-hint[data-mode="expand"] {
+            background: transparent;
+            color: #fff;
+        }
+        #citation-tooltip:hover .citation-tooltip-hint[data-mode="expand"] {
+            background: #fff;
+            color: #000;
+        }
+
+        /* When expanded: hint says "collapse".
+           Default = filled white + black text.
+           Hover = white outline + white text. */
+        #citation-tooltip .citation-tooltip-hint[data-mode="collapse"] {
+            background: #fff;
+            color: #000;
+        }
+        #citation-tooltip:hover .citation-tooltip-hint[data-mode="collapse"] {
+            background: transparent;
+            color: #fff;
         }
 
         .citation-ref {
             color: #00ff8a;
             cursor: pointer;
             font-weight: normal;
+            text-decoration: none; /* underline only on hover */
+            text-underline-offset: 2px;
+            background: transparent;
+            border: none;
+            padding: 0;
+            font: inherit;
         }
-        .citation-ref:hover { text-decoration: underline; }
+        .citation-ref:hover {
+            text-decoration: underline;
+            text-decoration-thickness: 2px;
+        }
 
         #loading {
             position: fixed;
@@ -427,6 +507,10 @@
         let citationAnswerSeq = 0;
         let citationHoverSeq = 0;
         let chatboxRect = null;
+
+        // Auto-fit state: when the graph expands, fit the viewport to all currently loaded nodes.
+        let autoFitTimer = null;
+        let autoFitSeq = 0;
 
         // Gesture control state (MediaPipe Tasks Vision: HandLandmarker)
         let gestureEnabled = false;
@@ -582,7 +666,7 @@
                 // Use HTML entities for [ ] to avoid regex double-wrapping.
                 const keyAttr = (answerId != null) ? ` data-cite="${answerId}:${n}"` : '';
                 return c
-                    ? `<span class="citation-ref" data-index="${n}"${keyAttr}>&#91;${n}&#93;</span>`
+                    ? `<button type="button" class="citation-ref" data-index="${n}"${keyAttr} aria-label="Open citation ${n}">&#91;${n}&#93;</button>`
                     : `[${n}]`;
             };
 
@@ -1764,7 +1848,9 @@
             });
 
             setGraphData(graphData, 'processTraversal');
+            if (Graph && typeof Graph.d3ReheatSimulation === 'function') Graph.d3ReheatSimulation();
             Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+            scheduleZoomToFitLoadedGraph();
         }
 
         function setGraphData(data, from) {
@@ -1776,6 +1862,99 @@
                 data.nodes = data.nodes.filter(n => typeof n === 'object');
             }
             Graph.graphData(data);
+        }
+
+        function scheduleZoomToFitLoadedGraph({ duration = 700, padding = 80, debounceMs = 180 } = {}) {
+            if (!Graph || typeof Graph.centerAt !== 'function' || typeof Graph.zoom !== 'function') return;
+            if (!graphData || !Array.isArray(graphData.nodes) || graphData.nodes.length === 0) return;
+
+            if (autoFitTimer) {
+                clearTimeout(autoFitTimer);
+                autoFitTimer = null;
+            }
+
+            // Debounce so multiple expansions in quick succession trigger a single fit.
+            autoFitTimer = setTimeout(() => {
+                autoFitTimer = null;
+                const seq = ++autoFitSeq;
+
+                const maxAttempts = 120; // ~2s at 60fps
+                const minPositionedRatio = 0.85;
+
+                const countPositionedNodes = () => {
+                    const nodes = graphData.nodes || [];
+                    let total = 0;
+                    let positioned = 0;
+                    for (const n of nodes) {
+                        if (!n || typeof n !== 'object') continue;
+                        total += 1;
+                        if (Number.isFinite(n.x) && Number.isFinite(n.y)) positioned += 1;
+                    }
+                    return { total, positioned };
+                };
+
+                const nodeFilter = (node) => {
+                    if (!node || typeof node !== 'object') return false;
+                    return Number.isFinite(node.x) && Number.isFinite(node.y);
+                };
+
+                const attemptFit = (attempt = 0) => {
+                    if (seq !== autoFitSeq || !Graph) return;
+                    if (!graphData || !Array.isArray(graphData.nodes) || graphData.nodes.length === 0) return;
+
+                    const { total, positioned } = countPositionedNodes();
+                    const ready = total > 0 && (positioned / total) >= minPositionedRatio;
+
+                    // Wait for layout to produce stable coordinates for most nodes.
+                    if (!ready && attempt < maxAttempts) {
+                        requestAnimationFrame(() => attemptFit(attempt + 1));
+                        return;
+                    }
+
+                    // Compute bounding box using force-graph's own bbox helper if available.
+                    let bbox = null;
+                    try {
+                        if (typeof Graph.getGraphBbox === 'function') {
+                            bbox = Graph.getGraphBbox(nodeFilter);
+                        }
+                    } catch (_) {
+                        bbox = null;
+                    }
+
+                    if (!bbox || !bbox.x || !bbox.y) {
+                        // Fallback: best-effort fit with whatever is currently positioned.
+                        if (attempt < maxAttempts) {
+                            requestAnimationFrame(() => attemptFit(attempt + 1));
+                        }
+                        return;
+                    }
+
+                    const minX = bbox.x[0], maxX = bbox.x[1];
+                    const minY = bbox.y[0], maxY = bbox.y[1];
+                    const spanX = maxX - minX;
+                    const spanY = maxY - minY;
+
+                    if (!Number.isFinite(spanX) || !Number.isFinite(spanY) || spanX <= 0 || spanY <= 0) return;
+
+                    const cx = (minX + maxX) / 2;
+                    const cy = (minY + maxY) / 2;
+
+                    const w = window.innerWidth;
+                    const h = window.innerHeight;
+                    const pad = Math.max(0, padding);
+
+                    const targetZoom = Math.max(
+                        1e-12,
+                        Math.min(1e12, (w - 2 * pad) / spanX, (h - 2 * pad) / spanY)
+                    );
+
+                    // Center and zoom to fit all loaded nodes.
+                    Graph.centerAt(cx, cy, duration);
+                    Graph.zoom(targetZoom, duration);
+                };
+
+                requestAnimationFrame(() => attemptFit(0));
+            }, debounceMs);
         }
 
         function normalizeGraphData(data, { assumeBase = false } = {}) {
@@ -1906,13 +2085,31 @@
             Graph.nodeCanvasObject(Graph.nodeCanvasObject());
         }
 
+        let citationInteractionsInstalled = false;
+        let activeCitationEl = null;
+        let activeCitation = null;
+        let activePinned = false;
+        let activeExpanded = false;
+        let hideTipTimer = null;
+
         function setupCitationHover() {
+            // Backwards-compatible name; this now installs hover+click behavior.
             const tooltip = document.getElementById('citation-tooltip');
             const graphContainer = document.getElementById('graph-container');
+            if (!tooltip || !graphContainer) return;
+
             const getCanvasRect = () => {
                 const canvas = graphContainer.querySelector('canvas');
                 return canvas ? canvas.getBoundingClientRect() : graphContainer.getBoundingClientRect();
             };
+
+            function getCitationFromEl(el) {
+                const citeKey = el?.dataset?.cite;
+                if (citeKey && citationStore.has(citeKey)) return citationStore.get(citeKey);
+                const idx = parseInt(el?.dataset?.index, 10);
+                if (!Number.isFinite(idx)) return null;
+                return citationData.find(cit => cit && cit.index === idx) || null;
+            }
 
             function getNodeScreenPosition(nodeId) {
                 const node = nodesById[nodeId];
@@ -1923,18 +2120,57 @@
                 return { x: rect.left + coords.x, y: rect.top + coords.y };
             }
 
-            function showTooltip(content, targetPos) {
-                const safeContent = content || 'Source';
-                tooltip.innerHTML = formatText(safeContent);
+            const truncate = (s, n) => {
+                const str = String(s || '');
+                if (str.length <= n) return str;
+                return str.slice(0, Math.max(0, n - 1)).trimEnd() + '…';
+            };
+
+            function renderTooltip(c) {
+                if (!c) return;
+
+                const author = c.author || c.author_source || '';
+                const work = c.work || c.title || '';
+                const title = c.title || '';
+                const tradition = c.tradition || '';
+
+                const metaRows = [];
+                if (author) metaRows.push(['Author', author]);
+                if (work) metaRows.push(['Work', work]);
+                if (title && work && title !== work) metaRows.push(['Title', title]);
+                if (tradition) metaRows.push(['Tradition', tradition]);
+
+                const snippetRaw = activeExpanded
+                    ? (c.full_content || c.preview || '')
+                    : (c.preview || c.full_content || '');
+                const snippet = activeExpanded ? snippetRaw : truncate(snippetRaw, 260);
+
+                const metaHtml = metaRows
+                    .map(([k, v]) => `
+                        <div class="citation-tooltip-k">${escapeHtml(k)}</div>
+                        <div class="citation-tooltip-v">${escapeHtml(v)}</div>
+                    `)
+                    .join('');
+
+                tooltip.classList.toggle('expanded', !!activeExpanded);
+                tooltip.innerHTML = `
+                    <div class="citation-tooltip-header">Citation &#91;${escapeHtml(String(c.index ?? ''))}&#93;</div>
+                    ${metaRows.length ? `<div class="citation-tooltip-meta">${metaHtml}</div>` : ''}
+                    <div class="citation-tooltip-snippet">${formatText(snippet || 'Source')}</div>
+                    <div class="citation-tooltip-hint" data-mode="${activeExpanded ? 'collapse' : 'expand'}">Click this box to ${activeExpanded ? 'collapse' : 'expand'}.</div>
+                `;
+            }
+
+            function positionTooltipAt(targetPos) {
                 tooltip.style.display = 'block';
                 const tipRect = tooltip.getBoundingClientRect();
 
-                // Offset to the right of the node and slightly above center
+                // Offset to the right of the anchor and slightly above center
                 const offsetX = 14;
                 const offsetY = -tipRect.height * 0.25;
 
-                let posX = targetPos.x + offsetX;
-                let posY = targetPos.y + offsetY;
+                let posX = (targetPos?.x ?? 0) + offsetX;
+                let posY = (targetPos?.y ?? 0) + offsetY;
 
                 // Clamp inside viewport with 10px padding
                 posX = Math.min(window.innerWidth - tipRect.width - 10, Math.max(10, posX));
@@ -1944,14 +2180,32 @@
                 tooltip.style.top = `${posY}px`;
             }
 
-            function trackTooltipToNode(seq, content, nodeIds, attempt = 0) {
+            function showTooltipAt(c, targetPos) {
+                renderTooltip(c);
+                positionTooltipAt(targetPos);
+            }
+
+            function hideTooltip({ clearHighlight = false } = {}) {
+                citationHoverSeq += 1; // cancel in-flight tracking
+                tooltip.style.display = 'none';
+                tooltip.classList.remove('expanded');
+                activeExpanded = false;
+                if (activeCitationEl) activeCitationEl.setAttribute('aria-expanded', 'false');
+                activeCitationEl = null;
+                activeCitation = null;
+                activePinned = false;
+                if (clearHighlight) {
+                    highlightNodes.clear();
+                    if (Graph) Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+                }
+            }
+
+            function trackTooltipToNode(seq, nodeIds, attempt = 0) {
                 if (seq !== citationHoverSeq) return;
                 if (!Array.isArray(nodeIds) || !nodeIds.length || attempt > 180) return;
                 const nodePosition = nodeIds.map(getNodeScreenPosition).find(Boolean);
-                if (nodePosition) {
-                    showTooltip(content, nodePosition);
-                }
-                requestAnimationFrame(() => trackTooltipToNode(seq, content, nodeIds, attempt + 1));
+                if (nodePosition) positionTooltipAt(nodePosition);
+                requestAnimationFrame(() => trackTooltipToNode(seq, nodeIds, attempt + 1));
             }
 
             function focusNodeView(seq, nodeIds, attempt = 0) {
@@ -1968,47 +2222,128 @@
                 Graph.zoom(4, 600);
             }
 
-            document.querySelectorAll('.citation-ref').forEach(el => {
-                el.onmouseenter = e => {
-                    const citeKey = el.dataset.cite;
-                    let c = null;
-                    if (citeKey && citationStore.has(citeKey)) {
-                        c = citationStore.get(citeKey);
-                    } else {
-                        const idx = parseInt(el.dataset.index, 10);
-                        c = citationData.find(cit => cit.index === idx);
-                    }
-                    if (!c) return;
+            function openHoverPreview(el) {
+                if (activePinned) return; // keep pinned tooltip stable
+                const c = getCitationFromEl(el);
+                if (!c) return;
+                activeCitationEl = el;
+                activeCitation = c;
+                activePinned = false;
+                activeExpanded = false;
 
-                    const content = c.full_content || c.preview || '';
-                    const nodeIds = Array.isArray(c.node_ids) ? c.node_ids : [];
+                // Anchor next to the citation in the chat log
+                const r = el.getBoundingClientRect();
+                const pos = { x: r.right, y: r.top + r.height * 0.5 };
+                showTooltipAt(c, pos);
+            }
 
-                    // start a new hover session (cancels any in-flight tracking)
-                    citationHoverSeq += 1;
-                    const seq = citationHoverSeq;
+            function openPinned(el, evt = null) {
+                const c = getCitationFromEl(el);
+                if (!c) return;
 
-                    const nodePosition = nodeIds.map(getNodeScreenPosition).find(Boolean);
-                    const targetPos = nodePosition || { x: e.clientX, y: e.clientY };
-                    showTooltip(content, targetPos);
+                // Toggle close if clicking the same citation again
+                if (activePinned && activeCitationEl === el) {
+                    hideTooltip({ clearHighlight: true });
+                    return;
+                }
 
-                    // Keep the tooltip pinned to the node while the camera animates
-                    trackTooltipToNode(seq, content, nodeIds);
+                activeCitationEl = el;
+                activeCitation = c;
+                activePinned = true;
+                activeExpanded = false;
+                el.setAttribute('aria-expanded', 'true');
+                el.setAttribute('aria-controls', 'citation-tooltip');
 
-                    if (nodeIds.length) {
-                        highlightNodes.clear();
-                        nodeIds.forEach(nid => highlightNodes.add(nid));
-                        Graph.nodeCanvasObject(Graph.nodeCanvasObject());
-                        focusNodeView(seq, nodeIds);
-                    }
-                };
+                const nodeIds = Array.isArray(c.node_ids) ? c.node_ids : [];
 
-                el.onmouseleave = () => {
-                    citationHoverSeq += 1;
-                    tooltip.style.display = 'none';
+                // Start a new session (cancels any in-flight tracking)
+                citationHoverSeq += 1;
+                const seq = citationHoverSeq;
+
+                const nodePosition = nodeIds.map(getNodeScreenPosition).find(Boolean);
+                const r = el.getBoundingClientRect();
+                const clickPos = evt && Number.isFinite(evt.clientX) && Number.isFinite(evt.clientY)
+                    ? { x: evt.clientX, y: evt.clientY }
+                    : null;
+                const fallbackPos = clickPos || { x: r.right, y: r.top + r.height * 0.5 };
+                const targetPos = nodePosition || fallbackPos;
+                showTooltipAt(c, targetPos);
+
+                // Keep the tooltip pinned to the node while the camera animates
+                trackTooltipToNode(seq, nodeIds);
+
+                if (nodeIds.length) {
                     highlightNodes.clear();
-                    Graph.nodeCanvasObject(Graph.nodeCanvasObject());
-                };
-            });
+                    nodeIds.forEach(nid => highlightNodes.add(nid));
+                    if (Graph) Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+                    focusNodeView(seq, nodeIds);
+                }
+            }
+
+            function clearHideTimer() {
+                if (hideTipTimer) {
+                    clearTimeout(hideTipTimer);
+                    hideTipTimer = null;
+                }
+            }
+
+            function scheduleHideIfNotPinned() {
+                clearHideTimer();
+                if (activePinned) return;
+                hideTipTimer = setTimeout(() => {
+                    // Only hide if the pointer isn't over the tooltip
+                    if (!tooltip.matches(':hover')) {
+                        hideTooltip({ clearHighlight: false });
+                    }
+                }, 120);
+            }
+
+            if (!citationInteractionsInstalled) {
+                citationInteractionsInstalled = true;
+
+                // Click to pin tooltip to source node and move camera.
+                document.addEventListener('click', e => {
+                    const el = e.target?.closest?.('.citation-ref');
+                    if (!el) return;
+                    e.stopPropagation();
+                    openPinned(el, e);
+                });
+
+                // Click tooltip to expand/collapse snippet.
+                tooltip.addEventListener('click', e => {
+                    e.stopPropagation();
+                    if (!activeCitation) return;
+                    activeExpanded = !activeExpanded;
+                    renderTooltip(activeCitation);
+
+                    // Reposition after size change
+                    const nodeIds = Array.isArray(activeCitation.node_ids) ? activeCitation.node_ids : [];
+                    const nodePosition = nodeIds.map(getNodeScreenPosition).find(Boolean);
+                    if (nodePosition) {
+                        positionTooltipAt(nodePosition);
+                    } else if (activeCitationEl) {
+                        const r = activeCitationEl.getBoundingClientRect();
+                        positionTooltipAt({ x: r.right, y: r.top + r.height * 0.5 });
+                    }
+                });
+
+                tooltip.addEventListener('mouseenter', () => clearHideTimer());
+                tooltip.addEventListener('mouseleave', () => scheduleHideIfNotPinned());
+
+                // Dismiss pinned tooltip on outside click / Escape.
+                document.addEventListener('click', e => {
+                    const insideTooltip = e.target?.closest?.('#citation-tooltip');
+                    const onCitation = e.target?.closest?.('.citation-ref');
+                    if (insideTooltip || onCitation) return;
+                    if (activePinned) hideTooltip({ clearHighlight: true });
+                });
+
+                window.addEventListener('keydown', e => {
+                    if (e.key === 'Escape' && activePinned) {
+                        hideTooltip({ clearHighlight: true });
+                    }
+                });
+            }
         }
 
         function initGraph() {

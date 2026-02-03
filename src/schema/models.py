@@ -129,6 +129,12 @@ class Citation:
     community_id: int | None = None
     node_ids: list[str] = field(default_factory=list)  # Entities in this chunk
 
+    # Optional provenance metadata (from `files` / `chunks` tables)
+    author: str | None = None
+    work: str | None = None
+    title: str | None = None
+    tradition: str | None = None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "index": self.index,
@@ -137,4 +143,8 @@ class Citation:
             "full_content": self.chunk_content,
             "community_id": self.community_id,
             "node_ids": self.node_ids,
+            "author": self.author,
+            "work": self.work,
+            "title": self.title,
+            "tradition": self.tradition,
         }

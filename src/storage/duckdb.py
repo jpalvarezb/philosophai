@@ -57,6 +57,41 @@ class DuckDBStorage:
             chunk_ids,
         ).fetchall()
 
+    def get_chunk_provenance(self, chunk_ids: list[str]) -> dict[str, dict[str, str | None]]:
+        """Map chunk_id -> provenance fields from `files` (via chunks.text_id).
+
+        This enables UI citation tooltips to show author/work/tradition metadata.
+        """
+        if not chunk_ids:
+            return {}
+
+        placeholders = ",".join(["?"] * len(chunk_ids))
+        rows = self.con.execute(
+            f"""
+            SELECT
+                c.chunk_id,
+                f.author_source,
+                f.title,
+                f.tradition
+            FROM chunks c
+            LEFT JOIN files f
+                ON c.text_id = f.text_id
+            WHERE c.chunk_id IN ({placeholders})
+            """,
+            chunk_ids,
+        ).fetchall()
+
+        out: dict[str, dict[str, str | None]] = {}
+        for r in rows:
+            if not r or not r[0]:
+                continue
+            out[str(r[0])] = {
+                "author": r[1] if r[1] else None,
+                "title": r[2] if r[2] else None,
+                "tradition": r[3] if r[3] else None,
+            }
+        return out
+
     def get_chunk_ids_with_triples(self, chunk_ids: list[str]) -> set[str]:
         """Return the subset of chunk_ids that have at least one mapped KG triple.
 
