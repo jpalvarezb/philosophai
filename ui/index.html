@@ -512,6 +512,15 @@
         let autoFitTimer = null;
         let autoFitSeq = 0;
 
+        // Initial UI state snapshot (captured once, then used by Reset to restore the UI).
+        const initialUiState = {
+            chatboxLeft: null,
+            chatboxTop: null,
+            graphZoom: null,
+            graphCenter: null, // {x,y} in graph coords at screen center
+        };
+        let initialUiCaptured = false;
+
         // Gesture control state (MediaPipe Tasks Vision: HandLandmarker)
         let gestureEnabled = false;
         let gestureActiveNodeId = null;
@@ -745,6 +754,42 @@
             document.body.classList.add('waiting');
         }
 
+        function captureInitialUiStateIfNeeded() {
+            if (initialUiCaptured) return;
+
+            // Chatbox position (absolute positioning; keep in px for easy restore)
+            initialUiState.chatboxLeft = chatbox.offsetLeft;
+            initialUiState.chatboxTop = chatbox.offsetTop;
+
+            // Graph view transform
+            if (Graph && typeof Graph.zoom === 'function' && typeof Graph.screen2GraphCoords === 'function') {
+                initialUiState.graphZoom = Graph.zoom() || 1;
+                const center = Graph.screen2GraphCoords(window.innerWidth / 2, window.innerHeight / 2);
+                initialUiState.graphCenter = (center && Number.isFinite(center.x) && Number.isFinite(center.y))
+                    ? { x: center.x, y: center.y }
+                    : { x: 0, y: 0 };
+            }
+
+            initialUiCaptured = true;
+        }
+
+        function restoreInitialUiState({ duration = 600 } = {}) {
+            // Restore chatbox placement
+            if (initialUiState.chatboxLeft != null) chatbox.style.left = `${initialUiState.chatboxLeft}px`;
+            if (initialUiState.chatboxTop != null) chatbox.style.top = `${initialUiState.chatboxTop}px`;
+            chatbox.classList.remove('dragging');
+            updateChatboxRect();
+
+            // Restore graph view
+            if (!Graph || typeof Graph.centerAt !== 'function' || typeof Graph.zoom !== 'function') return;
+            const z = Number.isFinite(initialUiState.graphZoom) ? initialUiState.graphZoom : 1;
+            const c = initialUiState.graphCenter;
+            if (c && Number.isFinite(c.x) && Number.isFinite(c.y)) {
+                Graph.centerAt(c.x, c.y, duration);
+            }
+            Graph.zoom(z, duration);
+        }
+
         function bootSequence() {
             disablePrompt();
             const thinker = startThinkingLine();
@@ -771,7 +816,30 @@
         function resetSystem() {
             if (gestureEnabled) stopGestureControl();
 
+            // Cancel scheduled auto-fit
+            if (autoFitTimer) {
+                clearTimeout(autoFitTimer);
+                autoFitTimer = null;
+            }
+
+            // Reset chat/prompt UI
             chatLog.innerHTML = '';
+            promptInput.value = '';
+            updatePromptDisplay();
+
+            // Hide citation tooltip + clear pinned/expanded state
+            const tooltip = document.getElementById('citation-tooltip');
+            if (tooltip) tooltip.style.display = 'none';
+            citationHoverSeq += 1; // cancel in-flight tracking
+            if (hideTipTimer) {
+                clearTimeout(hideTipTimer);
+                hideTipTimer = null;
+            }
+            activeCitationEl = null;
+            activeCitation = null;
+            activePinned = false;
+            activeExpanded = false;
+
             traversalNodes.clear();
             traversalLinks.clear();
             highlightNodes.clear();
@@ -779,7 +847,9 @@
             citationData = [];
             citationStore.clear();
             citationAnswerSeq = 0;
+
             resetGraphToBase();
+            restoreInitialUiState({ duration: 600 });
 
             // Call backend reset
             fetch(`${API_BASE}/api/agent/reset`, { method: 'POST' })
@@ -2501,6 +2571,9 @@
             Graph.d3Force('charge').strength(-120);
             Graph.d3Force('link').distance(120);
             Graph.onEngineTick(() => repelGraphFromChatbox());
+
+            // Capture the initial viewport/chatbox placement once (used by Reset).
+            captureInitialUiStateIfNeeded();
         }
 
         async function loadGraph() {
