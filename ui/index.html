@@ -11,6 +11,8 @@
         * { box-sizing: border-box; }
         /* Vintage pixel cursors */
         :root {
+            /* cursor vars could go here */
+        }
 
         body {
             margin: 0;
@@ -210,7 +212,6 @@
             line-height: 1.2;
             font-family: 'VT323', monospace;
             font-size: 18px;
-        }
             letter-spacing: 0;
         }
 
@@ -244,13 +245,13 @@
             display: flex;
             align-items: center;
             gap: 12px;
-            padding: 0 16px 10px 16px;
+            /* When prompt-row lives inside #chat-log (which is padded), avoid double-padding. */
+            padding: 10px 0 0 0;
             background: #000;
-            margin-top: -4px;
+            margin-top: 8px;
             font-size: 18px;
             line-height: 1.2;
             font-family: 'VT323', monospace;
-        }
             letter-spacing: 0;
         }
 
@@ -280,13 +281,14 @@
 
         #prompt-display {
             flex: 1;
-            white-space: pre;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
             overflow: hidden;
             pointer-events: none;
             font: inherit;
             color: #fff;
-            display: flex;
-            align-items: center;
+            display: block;
             min-height: 1.2em;
         }
 
@@ -318,6 +320,175 @@
 
         #prompt-input:disabled {
             color: rgba(255, 255, 255, 0.35);
+        }
+
+        /* --- Chatbox UX upgrades (wrapping input, buttons, resizing, scaling) --- */
+        #chatbox {
+            /* Default resizable size; JS can override width/height inline */
+            width: min(460px, 90vw);
+            height: min(520px, 82vh);
+            min-width: 280px;
+            min-height: 150px;
+            max-width: 92vw;
+            max-height: 92vh;
+
+            --chat-scale: 1;
+            --chat-font-lg: calc(18px * var(--chat-scale));
+            --chat-font-sm: calc(14px * var(--chat-scale));
+        }
+
+        #chatbox.collapsed #chat-log,
+        #chatbox.collapsed #prompt-row,
+        #chatbox.collapsed #resize-handle {
+            display: none;
+        }
+
+        #chat-log {
+            /* Override max-height layout so chatbox height is the source of truth */
+            max-height: none;
+            flex: 1;
+            min-height: 40px;
+        }
+
+        .chat-line,
+        .chat-line .prompt-symbol,
+        #prompt-row,
+        #prompt-row .prompt-symbol {
+            font-size: var(--chat-font-lg);
+        }
+
+        /* Header: keep existing pixel font but allow scaling */
+        .chat-header {
+            gap: 10px;
+            justify-content: space-between;
+        }
+        .chat-header span:first-child {
+            font-size: calc(10px * var(--chat-scale));
+        }
+
+        .icon-btn {
+            background: transparent;
+            border: none;
+            padding: 0;
+            color: #fff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            opacity: 1;
+        }
+        .icon-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+        .icon-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+        .icon-btn:hover:not(:disabled) {
+            color: #00ff8a;
+        }
+
+        /* Header button placement (absolute, pixel-aligned) */
+        #collapse-btn,
+        #save-btn {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 10;
+        }
+        #collapse-btn { right: 72px; }
+        #save-btn { right: 44px; }
+
+        /* Reset stays far right */
+        #reset-btn {
+            position: absolute;
+            right: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 10;
+        }
+
+        /* Hide the legacy header gesture button (gesture control now lives next to input) */
+        #gesture-btn-header {
+            display: none;
+        }
+
+        /* Prompt row: wrap instead of scrolling horizontally */
+        #prompt-row {
+            align-items: flex-start;
+        }
+        #prompt-row .prompt-symbol {
+            padding-top: 2px;
+        }
+
+        #prompt-input-wrap {
+            position: relative;
+            flex: 1;
+            display: flex;
+            align-items: flex-start;
+            overflow: auto;
+            max-height: calc(1.2em * 6);
+        }
+
+        #prompt-display {
+            width: 100%;
+            overflow: visible;
+        }
+
+        #prompt-input {
+            resize: none;
+            white-space: pre-wrap;
+            overflow: auto;
+        }
+
+        #prompt-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* Override old header-positioned gesture styles */
+        #gesture-btn {
+            position: static;
+            right: auto;
+            top: auto;
+            transform: none;
+            z-index: auto;
+        }
+
+        #send-btn {
+            border: 2px solid #fff;
+            box-shadow: 2px 2px 0 0 #fff;
+            width: 28px;
+            height: 28px;
+        }
+        #send-btn:hover:not(:disabled) {
+            background: #fff;
+            color: #000;
+        }
+
+        /* Resize handle (bottom-left) */
+        #resize-handle {
+            position: absolute;
+            left: -4px;
+            bottom: -4px;
+            width: 22px;
+            height: 22px;
+            cursor: nesw-resize;
+            touch-action: none;
+            z-index: 30;
+        }
+        #resize-handle::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background:
+                linear-gradient(135deg, transparent 0 55%, rgba(255,255,255,0.9) 55% 62%, transparent 62% 100%),
+                linear-gradient(135deg, transparent 0 30%, rgba(255,255,255,0.6) 30% 36%, transparent 36% 100%);
+            image-rendering: pixelated;
+            opacity: 0.9;
         }
 
         #citation-tooltip {
@@ -464,25 +635,54 @@
     <div id="chatbox" role="region" aria-label="Conversation window">
         <div class="chat-header">
             <span>PHIL KNOWLEDGE SYSTEM</span>
-            <button id="gesture-btn" title="Hand Gesture Control" aria-label="Hand Gesture Control">
+
+            <!-- Legacy header gesture button (hidden via CSS). Gesture control is next to input. -->
+            <button id="gesture-btn-header" class="icon-btn" title="Hand Gesture Control" aria-label="Hand Gesture Control">
                 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M12 4h1v1h-1zM7 17h1v1h-1zM18 17h1v1h-1zM4 9h1v1h-1zM14 13h1v1h-1zM5 10h1v1h-1zM8 9h1v1h-1zM17 12h1v1h-1zM9 8h1v1h-1zM11 5h1v1h-1zM9 17h1v1h-1zM11 14h1v1h-1zM15 5h1v1h-1zM13 17h1v1h-1zM15 14h1v1h-1zM6 11h1v1h-1zM16 13h1v1h-1zM7 10h1v1h-1zM18 10h1v1h-1zM12 18h1v1h-1zM14 15h1v1h-1zM5 12h1v1h-1zM8 11h1v1h-1zM17 14h1v1h-1zM9 10h1v1h-1zM11 7h1v1h-1zM9 19h1v1h-1zM11 16h1v1h-1zM13 10h1v1h-1zM15 7h1v1h-1zM10 20h1v1h-1zM13 19h1v1h-1zM15 16h1v1h-1zM6 13h1v1h-1zM16 15h1v1h-1zM7 12h1v1h-1zM18 12h1v1h-1zM14 8h1v1h-1zM17 7h1v1h-1zM8 4h1v1h-1zM12 20h1v1h-1zM14 17h1v1h-1zM17 16h1v1h-1zM9 12h1v1h-1zM11 9h1v1h-1zM9 21h1v1h-1zM13 12h1v1h-1zM15 9h1v1h-1zM13 21h1v1h-1zM16 17h1v1h-1zM7 14h1v1h-1zM18 14h1v1h-1zM12 13h1v1h-1zM14 10h1v1h-1zM17 9h1v1h-1zM9 5h1v1h-1zM11 2h1v1h-1zM14 19h1v1h-1zM9 14h1v1h-1zM10 15h1v1h-1zM13 14h1v1h-1zM15 11h1v1h-1zM16 10h1v1h-1zM18 7h1v1h-1zM7 16h1v1h-1zM18 16h1v1h-1zM12 6h1v1h-1zM12 15h1v1h-1zM14 12h1v1h-1zM5 9h1v1h-1zM17 11h1v1h-1zM9 7h1v1h-1zM11 4h1v1h-1zM14 21h1v1h-1zM9 16h1v1h-1zM15 4h1v1h-1zM10 17h1v1h-1zM13 16h1v1h-1zM15 13h1v1h-1zM16 12h1v1h-1zM18 9h1v1h-1zM12 8h1v1h-1zM14 5h1v1h-1zM12 17h1v1h-1zM14 14h1v1h-1zM5 11h1v1h-1zM9 9h1v1h-1zM8 13h1v1h-1zM10 10h1v1h-1zM15 6h1v1h-1zM10 19h1v1h-1zM13 18h1v1h-1zM11 18h1v1h-1zM16 14h1v1h-1zM7 11h1v1h-1zM18 11h1v1h-1zM6 15h1v1h-1zM12 10h1v1h-1zM14 7h1v1h-1zM12 19h1v1h-1zM14 16h1v1h-1zM8 6h1v1h-1zM8 15h1v1h-1zM10 12h1v1h-1zM13 11h1v1h-1zM11 11h1v1h-1zM10 21h1v1h-1zM11 20h1v1h-1zM16 16h1v1h-1zM12 3h1v1h-1zM6 17h1v1h-1zM12 12h1v1h-1zM14 9h1v1h-1zM12 21h1v1h-1zM14 18h1v1h-1zM8 8h1v1h-1zM8 17h1v1h-1zM10 14h1v1h-1zM11 13h1v1h-1zM6 10h1v1h-1zM12 5h1v1h-1zM12 14h1v1h-1zM14 11h1v1h-1zM4 10h1v1h-1zM17 13h1v1h-1zM8 10h1v1h-1zM11 6h1v1h-1zM10 16h1v1h-1zM9 18h1v1h-1zM11 15h1v1h-1zM15 15h1v1h-1zM6 12h1v1h-1zM12 7h1v1h-1zM14 4h1v1h-1zM12 16h1v1h-1zM17 6h1v1h-1zM17 15h1v1h-1zM8 12h1v1h-1zM9 11h1v1h-1zM11 8h1v1h-1zM10 18h1v1h-1zM9 20h1v1h-1zM11 17h1v1h-1zM15 8h1v1h-1zM13 20h1v1h-1zM15 17h1v1h-1zM6 14h1v1h-1zM7 13h1v1h-1zM18 13h1v1h-1zM12 9h1v1h-1zM14 6h1v1h-1zM17 8h1v1h-1zM8 5h1v1h-1zM9 4h1v1h-1zM17 17h1v1h-1zM8 14h1v1h-1zM10 11h1v1h-1zM9 13h1v1h-1zM11 10h1v1h-1zM11 19h1v1h-1zM13 13h1v1h-1zM15 10h1v1h-1zM18 6h1v1h-1zM12 2h1v1h-1zM6 16h1v1h-1zM7 15h1v1h-1zM18 15h1v1h-1zM12 11h1v1h-1zM17 10h1v1h-1zM8 7h1v1h-1zM9 6h1v1h-1zM11 3h1v1h-1zM14 20h1v1h-1zM8 16h1v1h-1zM10 13h1v1h-1zM9 15h1v1h-1zM11 12h1v1h-1zM11 21h1v1h-1zM13 15h1v1h-1zM15 12h1v1h-1zM16 11h1v1h-1zM18 8h1v1h-1z" fill="#fff"/>
                 </svg>
             </button>
-            <button id="reset-btn" title="Reset Session" aria-label="Reset">
+
+            <button id="collapse-btn" class="icon-btn" title="Collapse" aria-label="Collapse chatbox">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M5 12h14v2H5z" fill="#fff"/>
+                </svg>
+            </button>
+
+            <button id="save-btn" class="icon-btn" title="Save" aria-label="Save chat">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M4 3h14v4h2v14H4V3zm2 2v14h12V9h-2V5H6zm2 0h6v4H8V5zm0 8h8v2H8v-2z" fill="#fff"/>
+                </svg>
+            </button>
+
+            <button id="reset-btn" class="icon-btn" title="Reset Session" aria-label="Reset">
                 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M16 2h-2v2h2v2H4v2H2v5h2V8h12v2h-2v2h2v-2h2V8h2V6h-2V4h-2V2zM6 20h2v2h2v-2H8v-2h12v-2h2v-5h-2v5H8v-2h2v-2H8v2H6v2H4v2h2v2z" fill="#fff"/>
                 </svg>
             </button>
         </div>
-        <div id="chat-log" aria-live="polite"></div>
-        <div id="prompt-row">
-            <span class="prompt-symbol">&gt;</span>
-            <div style="position: relative; flex: 1; display: flex; align-items: center; overflow: hidden;">
-                <div id="prompt-display"></div>
-                <input id="prompt-input" type="text" placeholder="" autocomplete="off" spellcheck="false" disabled>
+        <div id="chat-log" aria-live="polite">
+            <div id="prompt-row">
+                <span class="prompt-symbol">&gt;</span>
+                <div id="prompt-input-wrap">
+                    <div id="prompt-display"></div>
+                    <textarea id="prompt-input" rows="1" wrap="soft" placeholder="" autocomplete="off" spellcheck="false" disabled></textarea>
+                </div>
+                <div id="prompt-actions">
+                    <button id="gesture-btn" class="icon-btn" title="Hand Gesture Control" aria-label="Hand Gesture Control">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 4h1v1h-1zM7 17h1v1h-1zM18 17h1v1h-1zM4 9h1v1h-1zM14 13h1v1h-1zM5 10h1v1h-1zM8 9h1v1h-1zM17 12h1v1h-1zM9 8h1v1h-1zM11 5h1v1h-1zM9 17h1v1h-1zM11 14h1v1h-1zM15 5h1v1h-1zM13 17h1v1h-1zM15 14h1v1h-1zM6 11h1v1h-1zM16 13h1v1h-1zM7 10h1v1h-1zM18 10h1v1h-1zM12 18h1v1h-1zM14 15h1v1h-1zM5 12h1v1h-1zM8 11h1v1h-1zM17 14h1v1h-1zM9 10h1v1h-1zM11 7h1v1h-1zM9 19h1v1h-1zM11 16h1v1h-1zM13 10h1v1h-1zM15 7h1v1h-1zM10 20h1v1h-1zM13 19h1v1h-1zM15 16h1v1h-1zM6 13h1v1h-1zM16 15h1v1h-1zM7 12h1v1h-1zM18 12h1v1h-1zM14 8h1v1h-1zM17 7h1v1h-1zM8 4h1v1h-1zM12 20h1v1h-1zM14 17h1v1h-1zM17 16h1v1h-1zM9 12h1v1h-1zM11 9h1v1h-1zM9 21h1v1h-1zM13 12h1v1h-1zM15 9h1v1h-1zM13 21h1v1h-1zM16 17h1v1h-1zM7 14h1v1h-1zM18 14h1v1h-1zM12 13h1v1h-1zM14 10h1v1h-1zM17 9h1v1h-1zM9 5h1v1h-1zM11 2h1v1h-1zM14 19h1v1h-1zM9 14h1v1h-1zM10 15h1v1h-1zM13 14h1v1h-1zM15 11h1v1h-1zM16 10h1v1h-1zM18 7h1v1h-1zM7 16h1v1h-1zM18 16h1v1h-1zM12 6h1v1h-1zM12 15h1v1h-1zM14 12h1v1h-1zM5 9h1v1h-1zM17 11h1v1h-1zM9 7h1v1h-1zM11 4h1v1h-1zM14 21h1v1h-1zM9 16h1v1h-1zM15 4h1v1h-1zM10 17h1v1h-1zM13 16h1v1h-1zM15 13h1v1h-1zM16 12h1v1h-1zM18 9h1v1h-1zM12 8h1v1h-1zM14 5h1v1h-1zM12 17h1v1h-1zM14 14h1v1h-1zM5 11h1v1h-1zM9 9h1v1h-1zM8 13h1v1h-1zM10 10h1v1h-1zM15 6h1v1h-1zM10 19h1v1h-1zM13 18h1v1h-1zM11 18h1v1h-1zM16 14h1v1h-1zM7 11h1v1h-1zM18 11h1v1h-1zM6 15h1v1h-1zM12 10h1v1h-1zM14 7h1v1h-1zM12 19h1v1h-1zM14 16h1v1h-1zM8 6h1v1h-1zM8 15h1v1h-1zM10 12h1v1h-1zM13 11h1v1h-1zM11 11h1v1h-1zM10 21h1v1h-1zM11 20h1v1h-1zM16 16h1v1h-1zM12 3h1v1h-1zM6 17h1v1h-1zM12 12h1v1h-1zM14 9h1v1h-1zM12 21h1v1h-1zM14 18h1v1h-1zM8 8h1v1h-1zM8 17h1v1h-1zM10 14h1v1h-1zM11 13h1v1h-1zM6 10h1v1h-1zM12 5h1v1h-1zM12 14h1v1h-1zM14 11h1v1h-1zM4 10h1v1h-1zM17 13h1v1h-1zM8 10h1v1h-1zM11 6h1v1h-1zM10 16h1v1h-1zM9 18h1v1h-1zM11 15h1v1h-1zM15 15h1v1h-1zM6 12h1v1h-1zM12 7h1v1h-1zM14 4h1v1h-1zM12 16h1v1h-1zM17 6h1v1h-1zM17 15h1v1h-1zM8 12h1v1h-1zM9 11h1v1h-1zM11 8h1v1h-1zM10 18h1v1h-1zM9 20h1v1h-1zM11 17h1v1h-1zM15 8h1v1h-1zM13 20h1v1h-1zM15 17h1v1h-1zM6 14h1v1h-1zM7 13h1v1h-1zM18 13h1v1h-1zM12 9h1v1h-1zM14 6h1v1h-1zM17 8h1v1h-1zM8 5h1v1h-1zM9 4h1v1h-1zM17 17h1v1h-1zM8 14h1v1h-1zM10 11h1v1h-1zM9 13h1v1h-1zM11 10h1v1h-1zM11 19h1v1h-1zM13 13h1v1h-1zM15 10h1v1h-1zM18 6h1v1h-1zM12 2h1v1h-1zM6 16h1v1h-1zM7 15h1v1h-1zM18 15h1v1h-1zM12 11h1v1h-1zM17 10h1v1h-1zM8 7h1v1h-1zM9 6h1v1h-1zM11 3h1v1h-1zM14 20h1v1h-1zM8 16h1v1h-1zM10 13h1v1h-1zM9 15h1v1h-1zM11 12h1v1h-1zM11 21h1v1h-1zM13 15h1v1h-1zM15 12h1v1h-1zM16 11h1v1h-1zM18 8h1v1h-1z" fill="#fff"/>
+                        </svg>
+                    </button>
+                    <button id="send-btn" class="icon-btn" title="Send" aria-label="Send message">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M4 11h8V9h2v2h2v2h-2v2h-2v-2H4v-2zm12 0h2v2h-2v-2zm2-2h2v6h-2V9z" fill="currentColor"/>
+                        </svg>
+                    </button>
+                </div>
             </div>
         </div>
+        <div id="resize-handle" title="Resize" aria-label="Resize chatbox"></div>
     </div>
 
     <div id="citation-tooltip"></div>
@@ -516,6 +716,10 @@
         const initialUiState = {
             chatboxLeft: null,
             chatboxTop: null,
+            chatboxWidth: null,
+            chatboxHeight: null,
+            chatboxCollapsed: null,
+            chatboxScale: null,
             graphZoom: null,
             graphCenter: null, // {x,y} in graph coords at screen center
         };
@@ -598,6 +802,15 @@
         const promptInput = document.getElementById('prompt-input');
         const promptDisplay = document.getElementById('prompt-display');
         const promptRow = document.getElementById('prompt-row');
+        const promptWrap = document.getElementById('prompt-input-wrap');
+        const sendBtn = document.getElementById('send-btn');
+        const collapseBtn = document.getElementById('collapse-btn');
+        const saveBtn = document.getElementById('save-btn');
+        const resizeHandle = document.getElementById('resize-handle');
+        const chatHeader = chatbox ? chatbox.querySelector('.chat-header') : null;
+
+        let chatboxCollapsed = false;
+        let lastExpandedHeight = null;
 
         const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
         const htmlEscapes = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -625,7 +838,14 @@
             if (text) setLineContent(textEl, text, options);
             line.appendChild(prompt);
             line.appendChild(textEl);
-            chatLog.appendChild(line);
+
+            // Keep the prompt row at the bottom of the log by inserting new lines before it.
+            if (promptRow && promptRow.parentElement === chatLog) {
+                chatLog.insertBefore(line, promptRow);
+            } else {
+                chatLog.appendChild(line);
+            }
+
             chatLog.scrollTop = chatLog.scrollHeight;
             return {
                 line,
@@ -723,8 +943,11 @@
             }
             promptDisplay.innerHTML = html;
 
-            // Sync scroll
-            promptDisplay.scrollLeft = promptInput.scrollLeft;
+            // Sync scroll (textarea is the scroll source; wrapper scrolls the visible display)
+            if (promptWrap) {
+                promptWrap.scrollLeft = promptInput.scrollLeft;
+                promptWrap.scrollTop = promptInput.scrollTop;
+            }
         }
 
         function focusPrompt() {
@@ -732,15 +955,16 @@
         }
 
         function setPromptVisible(visible) {
-            if (visible) {
-                promptRow.style.display = 'flex';
-            } else {
+            if (chatboxCollapsed) {
                 promptRow.style.display = 'none';
+                return;
             }
+            promptRow.style.display = visible ? 'flex' : 'none';
         }
 
         function enablePrompt() {
             promptInput.disabled = false;
+            if (sendBtn) sendBtn.disabled = false;
             promptInput.placeholder = '';
             setPromptVisible(true);
             focusPrompt();
@@ -750,6 +974,7 @@
 
         function disablePrompt() {
             promptInput.disabled = true;
+            if (sendBtn) sendBtn.disabled = true;
             setPromptVisible(false);
             document.body.classList.add('waiting');
         }
@@ -760,6 +985,12 @@
             // Chatbox position (absolute positioning; keep in px for easy restore)
             initialUiState.chatboxLeft = chatbox.offsetLeft;
             initialUiState.chatboxTop = chatbox.offsetTop;
+            initialUiState.chatboxWidth = chatbox.offsetWidth;
+            initialUiState.chatboxHeight = chatbox.offsetHeight;
+            initialUiState.chatboxCollapsed = chatbox.classList.contains('collapsed');
+            const cs = getComputedStyle(chatbox);
+            const s = parseFloat(cs.getPropertyValue('--chat-scale'));
+            initialUiState.chatboxScale = Number.isFinite(s) ? s : 1;
 
             // Graph view transform
             if (Graph && typeof Graph.zoom === 'function' && typeof Graph.screen2GraphCoords === 'function') {
@@ -774,9 +1005,14 @@
         }
 
         function restoreInitialUiState({ duration = 600 } = {}) {
-            // Restore chatbox placement
+            // Restore chatbox placement + size
             if (initialUiState.chatboxLeft != null) chatbox.style.left = `${initialUiState.chatboxLeft}px`;
             if (initialUiState.chatboxTop != null) chatbox.style.top = `${initialUiState.chatboxTop}px`;
+            if (initialUiState.chatboxWidth != null) chatbox.style.width = `${initialUiState.chatboxWidth}px`;
+            if (initialUiState.chatboxHeight != null) chatbox.style.height = `${initialUiState.chatboxHeight}px`;
+
+            setChatboxCollapsed(!!initialUiState.chatboxCollapsed, { fromRestore: true });
+
             chatbox.classList.remove('dragging');
             updateChatboxRect();
 
@@ -807,7 +1043,7 @@
         }
 
         function handlePromptSubmit(e) {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 runQuery();
             }
@@ -822,8 +1058,8 @@
                 autoFitTimer = null;
             }
 
-            // Reset chat/prompt UI
-            chatLog.innerHTML = '';
+            // Reset chat/prompt UI (keep prompt-row DOM)
+            Array.from(chatLog.querySelectorAll('.chat-line')).forEach(el => el.remove());
             promptInput.value = '';
             updatePromptDisplay();
 
@@ -1793,6 +2029,27 @@
             });
         }
 
+        if (sendBtn) {
+            sendBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                runQuery();
+            });
+        }
+
+        if (collapseBtn) {
+            collapseBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                setChatboxCollapsed(!chatboxCollapsed);
+            });
+        }
+
+        if (saveBtn) {
+            saveBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                saveChatToFile();
+            });
+        }
+
         document.getElementById('reset-btn').addEventListener('click', (e) => {
             e.stopPropagation(); // Prevent drag start if clicking button
             resetSystem();
@@ -2683,8 +2940,67 @@
             }
         }
 
+        function applyChatScaleFromSize(width, height) {
+            if (!chatbox) return;
+            if (!Number.isFinite(width) || !Number.isFinite(height)) return;
+            const baseW = 460;
+            const baseH = 520;
+            const area = Math.max(1, width * height);
+            const baseArea = baseW * baseH;
+            const next = clamp(Math.sqrt(area / baseArea), 0.75, 1.6);
+            chatbox.style.setProperty('--chat-scale', String(next));
+        }
+
         function updateChatboxRect() {
             chatboxRect = chatbox.getBoundingClientRect();
+            if (chatboxRect) applyChatScaleFromSize(chatboxRect.width, chatboxRect.height);
+        }
+
+        function setChatboxCollapsed(collapsed, { fromRestore = false } = {}) {
+            if (!chatbox) return;
+            const next = !!collapsed;
+            chatboxCollapsed = next;
+
+            if (next) {
+                if (!fromRestore) lastExpandedHeight = chatbox.offsetHeight;
+                chatbox.classList.add('collapsed');
+                const h = (chatHeader && chatHeader.offsetHeight) ? chatHeader.offsetHeight : 56;
+                chatbox.style.height = `${h}px`;
+                // Inline hide to override any previous prompt-row inline display.
+                if (promptRow) promptRow.style.display = 'none';
+            } else {
+                chatbox.classList.remove('collapsed');
+                const restoreH = lastExpandedHeight || initialUiState.chatboxHeight;
+                if (restoreH) chatbox.style.height = `${restoreH}px`;
+                // Restore prompt visibility only if we're not in waiting/disabled state.
+                if (promptRow && !promptInput.disabled) promptRow.style.display = 'flex';
+            }
+
+            updateChatboxRect();
+        }
+
+        function saveChatToFile() {
+            const lines = Array.from(chatLog.querySelectorAll('.chat-line'));
+            const out = lines.map(line => {
+                const role = line.classList.contains('user') ? 'USER'
+                    : line.classList.contains('system') ? 'SYSTEM'
+                    : 'AI';
+                const textEl = line.querySelector('.line-text');
+                const text = textEl ? (textEl.innerText || '').trimEnd() : '';
+                return `${role}: ${text}`;
+            }).join('\n\n');
+
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const name = `philosiphai-chat-${stamp}.txt`;
+            const blob = new Blob([out || ''], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = name;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 250);
         }
 
         function repelGraphFromChatbox() {
@@ -2767,12 +3083,13 @@
                 // Allow dragging from header or the box border/background itself,
                 // but NOT from text selection areas or inputs
                 const target = e.target;
-                const isInput = target.tagName === 'INPUT' || target.closest('input');
+                const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.closest('input, textarea');
                 const isLog = target.closest('#chat-log');
                 const isLink = target.closest('a') || target.closest('button') || target.closest('.citation-ref');
+                const isResize = target.closest('#resize-handle');
 
-                // If clicking log, input, interactive elements, or the reset button, don't drag
-                if (isInput || isLog || isLink || target.closest('#reset-btn')) return;
+                // If clicking log, input, resize handle, or interactive elements, don't drag
+                if (isInput || isLog || isResize || isLink || target.closest('#reset-btn')) return;
 
                 pointerId = e.pointerId;
                 const rect = chatbox.getBoundingClientRect();
@@ -2792,28 +3109,107 @@
             new ResizeObserver(() => updateChatboxRect()).observe(chatbox);
         }
 
+        function enableResizing() {
+            if (!resizeHandle || !chatbox) return;
+
+            let pointerId = null;
+            let startX = 0;
+            let startY = 0;
+            let startLeft = 0;
+            let startTop = 0;
+            let startWidth = 0;
+            let startHeight = 0;
+            let startRight = 0;
+
+            const MIN_W = 280;
+            const MIN_H = 150;
+
+            const onMove = (e) => {
+                if (pointerId === null || e.pointerId !== pointerId) return;
+
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+
+                const maxW = Math.max(MIN_W, startRight - 10);
+                const maxH = Math.max(MIN_H, window.innerHeight - startTop - 10);
+
+                const nextW = clamp(startWidth - dx, MIN_W, maxW);
+                const nextH = clamp(startHeight + dy, MIN_H, maxH);
+                const nextLeft = clamp(startRight - nextW, 10, startRight - MIN_W);
+
+                chatbox.style.left = `${nextLeft}px`;
+                chatbox.style.width = `${nextW}px`;
+                chatbox.style.height = `${nextH}px`;
+                updateChatboxRect();
+            };
+
+            const end = (e) => {
+                if (pointerId === null || (e && e.pointerId !== pointerId)) return;
+                try { resizeHandle.releasePointerCapture(pointerId); } catch (_) {}
+                pointerId = null;
+                updateChatboxRect();
+            };
+
+            resizeHandle.addEventListener('pointerdown', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                if (chatbox.classList.contains('collapsed')) return;
+
+                pointerId = e.pointerId;
+                startX = e.clientX;
+                startY = e.clientY;
+                startLeft = chatbox.offsetLeft;
+                startTop = chatbox.offsetTop;
+                startWidth = chatbox.offsetWidth;
+                startHeight = chatbox.offsetHeight;
+                startRight = startLeft + startWidth;
+
+                resizeHandle.setPointerCapture(pointerId);
+                if (Graph && typeof Graph.d3ReheatSimulation === 'function') Graph.d3ReheatSimulation();
+            });
+
+            resizeHandle.addEventListener('pointermove', onMove);
+            resizeHandle.addEventListener('pointerup', end);
+            resizeHandle.addEventListener('pointercancel', end);
+        }
+
         promptInput.addEventListener('keydown', handlePromptSubmit);
         // Sync display on input interactions
-        ['input', 'keydown', 'keyup', 'click', 'select', 'focus', 'blur'].forEach(evt => {
+        ['input', 'keydown', 'keyup', 'click', 'select', 'focus', 'blur', 'scroll'].forEach(evt => {
             promptInput.addEventListener(evt, () => requestAnimationFrame(updatePromptDisplay));
         });
 
         window.addEventListener('resize', () => {
             if (!chatboxRect) return;
+
+            // Clamp size to viewport
+            const maxW = Math.max(280, window.innerWidth - 20);
+            const maxH = Math.max(150, window.innerHeight - 20);
+            if (chatbox.offsetWidth > maxW) chatbox.style.width = `${maxW}px`;
+            if (chatbox.offsetHeight > maxH) chatbox.style.height = `${maxH}px`;
+
+            // Clamp position to viewport
             chatbox.style.left = `${clamp(chatbox.offsetLeft, 10, window.innerWidth - chatbox.offsetWidth - 10)}px`;
             chatbox.style.top = `${clamp(chatbox.offsetTop, 10, window.innerHeight - chatbox.offsetHeight - 10)}px`;
+
             if (Graph) Graph.width(window.innerWidth).height(window.innerHeight);
             updateChatboxRect();
         });
 
-        chatbox.addEventListener('click', () => focusPrompt());
+        chatbox.addEventListener('click', () => {
+            if (chatboxCollapsed) return;
+            if (promptInput.disabled) return;
+            focusPrompt();
+        });
         window.addEventListener('keydown', e => {
             if (e.metaKey || e.ctrlKey || e.altKey) return;
+            if (chatboxCollapsed) return;
             if (promptInput.disabled) return;
             if (document.activeElement !== promptInput) focusPrompt();
         });
 
         enableDragging();
+        enableResizing();
         try {
             updateChatboxRect();
             initGraph();
