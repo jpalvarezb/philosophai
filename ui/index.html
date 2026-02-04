@@ -116,48 +116,26 @@
             cursor: grabbing;
         }
 
-        #gesture-btn {
+        /* Corner controls: bottom-left (gesture + reset) */
+        #corner-left-actions {
             position: absolute;
-            right: 44px; /* left of reset */
-            top: 50%;
-            transform: translateY(-50%);
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            padding: 0;
-            color: #fff;
-            opacity: 1;
-            display: flex;
+            left: 16px;
+            bottom: 16px;
+            display: inline-flex;
             align-items: center;
-            justify-content: center;
-            z-index: 10;
-        }
-
-        #gesture-btn svg {
-            width: 20px;
-            height: 20px;
-        }
-
-        #reset-btn {
-            position: absolute;
-            right: 16px;
-            top: 50%;
-            transform: translateY(-50%);
+            gap: 10px;
+            z-index: 30;
             background: transparent;
-            border: none;
-            cursor: pointer;
             padding: 0;
-            color: #fff;
-            opacity: 1; /* Always fully visible */
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 10;
         }
 
-        #reset-btn svg {
-            width: 20px;
-            height: 20px;
+        #corner-left-actions .icon-btn {
+            width: 28px;
+            height: 28px;
+        }
+        #corner-left-actions .icon-btn svg {
+            width: 28px;
+            height: 28px;
         }
 
         .chat-header {
@@ -191,11 +169,27 @@
         #chat-log {
             max-height: 60vh;
             padding: 14px 16px 20px 16px;
+            padding-bottom: calc(20px + var(--chat-bottom-safe));
+            scroll-padding-bottom: var(--chat-bottom-safe);
             overflow-y: auto;
             font-size: 14px;
             scrollbar-width: thin;
             scrollbar-color: #fff transparent;
             image-rendering: pixelated;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Full-width bottom overlay so bottom controls never compete with chat text visually. */
+        #chat-bottom-overlay {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: var(--chat-bottom-safe);
+            background: #000;
+            z-index: 25;
+            pointer-events: none;
         }
 
         #chat-log::-webkit-scrollbar { width: 6px; }
@@ -243,8 +237,9 @@
 
         #prompt-row {
             display: flex;
-            align-items: center;
-            gap: 12px;
+            align-items: flex-start;
+            gap: 10px;
+            width: 100%;
             /* When prompt-row lives inside #chat-log (which is padded), avoid double-padding. */
             padding: 10px 0 0 0;
             background: #000;
@@ -335,11 +330,16 @@
             --chat-scale: 1;
             --chat-font-lg: calc(18px * var(--chat-scale));
             --chat-font-sm: calc(14px * var(--chat-scale));
+
+            /* Space to keep chat content clear of bottom overlay controls (gesture/reset + resize handle). */
+            --chat-bottom-safe: 72px;
         }
 
         #chatbox.collapsed #chat-log,
         #chatbox.collapsed #prompt-row,
-        #chatbox.collapsed #resize-handle {
+        #chatbox.collapsed #resize-handle,
+        #chatbox.collapsed #corner-left-actions,
+        #chatbox.collapsed #chat-bottom-overlay {
             display: none;
         }
 
@@ -390,8 +390,25 @@
             color: #00ff8a;
         }
 
+        .icon-btn:focus-visible {
+            outline: 2px solid #00ff8a;
+            outline-offset: 2px;
+        }
+
+        /* Ensure ALL chatbox icons inherit the button color (so hover -> bright green works everywhere). */
+        #chatbox button {
+            color: #fff;
+        }
+        #chatbox button:hover:not(:disabled) {
+            color: #00ff8a;
+        }
+        #chatbox button svg [fill]:not([fill="none"]) {
+            fill: currentColor;
+        }
+
         /* Header button placement (absolute, pixel-aligned) */
         #collapse-btn,
+        #drag-btn,
         #save-btn {
             position: absolute;
             top: 50%;
@@ -399,18 +416,19 @@
             z-index: 10;
         }
         #collapse-btn { right: 72px; }
-        #save-btn { right: 44px; }
+        #drag-btn { right: 44px; }
+        #save-btn { right: 16px; }
 
-        /* Reset stays far right */
-        #reset-btn {
-            position: absolute;
-            right: 16px;
-            top: 50%;
-            transform: translateY(-50%);
-            z-index: 10;
+        #drag-btn {
+            cursor: grab;
+            touch-action: none;
+        }
+        #chatbox.dragging #drag-btn {
+            cursor: grabbing;
         }
 
-        /* Hide the legacy header gesture button (gesture control now lives next to input) */
+
+        /* Hide the legacy header gesture button (gesture control now lives bottom-right in the chatbox) */
         #gesture-btn-header {
             display: none;
         }
@@ -425,7 +443,11 @@
 
         #prompt-input-wrap {
             position: relative;
-            flex: 1;
+            /* Fill available row width so the send icon lands near the right edge. */
+            flex: 1 1 auto;
+            min-width: 0;
+            width: auto;
+            max-width: none;
             display: flex;
             align-items: flex-start;
             overflow: auto;
@@ -445,50 +467,92 @@
 
         #prompt-actions {
             display: flex;
-            align-items: center;
-            gap: 10px;
+            align-items: flex-start;
+            gap: 6px;
+            margin-left: 6px;
+            padding-top: 1px;
         }
 
-        /* Override old header-positioned gesture styles */
-        #gesture-btn {
-            position: static;
-            right: auto;
-            top: auto;
-            transform: none;
-            z-index: auto;
+        /* Ensure prompt-row controls never get accidentally absolutely positioned */
+        #prompt-row #send-btn {
+            position: static !important;
+            right: auto !important;
+            top: auto !important;
+            bottom: auto !important;
+            left: auto !important;
+            transform: none !important;
         }
 
+        /* Send button: pixel paper-plane icon (white only, no box) */
         #send-btn {
-            border: 2px solid #fff;
-            box-shadow: 2px 2px 0 0 #fff;
             width: 28px;
             height: 28px;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            padding: 0;
+            margin: 0;
+            color: #fff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
         }
-        #send-btn:hover:not(:disabled) {
-            background: #fff;
-            color: #000;
-        }
-
-        /* Resize handle (bottom-left) */
-        #resize-handle {
-            position: absolute;
-            left: -4px;
-            bottom: -4px;
+        #send-btn svg {
             width: 22px;
             height: 22px;
-            cursor: nesw-resize;
+            shape-rendering: crispEdges;
+            image-rendering: pixelated;
+        }
+
+        /* Gesture button: lives inside #corner-left-actions (no box) */
+        #gesture-btn {
+            width: 28px;
+            height: 28px;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            padding: 0;
+            color: #fff;
+        }
+        #gesture-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+        #gesture-btn:hover:not(:disabled) {
+            color: #00ff8a;
+        }
+
+        /* Resize/drag handle (bottom-right): diagonal line with arrows */
+        #resize-handle {
+            position: absolute;
+            right: 12px;
+            left: auto;
+            bottom: 12px;
+            /* Larger hit target (MDN recommends ~44x44 for interactive controls) */
+            width: 44px;
+            height: 44px;
+            cursor: nwse-resize;
             touch-action: none;
             z-index: 30;
+            background: transparent;
+            border: none;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
         }
-        #resize-handle::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background:
-                linear-gradient(135deg, transparent 0 55%, rgba(255,255,255,0.9) 55% 62%, transparent 62% 100%),
-                linear-gradient(135deg, transparent 0 30%, rgba(255,255,255,0.6) 30% 36%, transparent 36% 100%);
+        #resize-handle svg {
+            width: 28px;
+            height: 28px;
+            shape-rendering: crispEdges;
             image-rendering: pixelated;
-            opacity: 0.9;
+        }
+
+        #resize-handle:focus-visible {
+            outline: 2px solid #00ff8a;
+            outline-offset: 2px;
         }
 
         #citation-tooltip {
@@ -636,28 +700,46 @@
         <div class="chat-header">
             <span>PHIL KNOWLEDGE SYSTEM</span>
 
-            <!-- Legacy header gesture button (hidden via CSS). Gesture control is next to input. -->
+            <!-- Legacy header gesture button (hidden via CSS). Gesture control is bottom-right. -->
             <button id="gesture-btn-header" class="icon-btn" title="Hand Gesture Control" aria-label="Hand Gesture Control">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M12 4h1v1h-1zM7 17h1v1h-1zM18 17h1v1h-1zM4 9h1v1h-1zM14 13h1v1h-1zM5 10h1v1h-1zM8 9h1v1h-1zM17 12h1v1h-1zM9 8h1v1h-1zM11 5h1v1h-1zM9 17h1v1h-1zM11 14h1v1h-1zM15 5h1v1h-1zM13 17h1v1h-1zM15 14h1v1h-1zM6 11h1v1h-1zM16 13h1v1h-1zM7 10h1v1h-1zM18 10h1v1h-1zM12 18h1v1h-1zM14 15h1v1h-1zM5 12h1v1h-1zM8 11h1v1h-1zM17 14h1v1h-1zM9 10h1v1h-1zM11 7h1v1h-1zM9 19h1v1h-1zM11 16h1v1h-1zM13 10h1v1h-1zM15 7h1v1h-1zM10 20h1v1h-1zM13 19h1v1h-1zM15 16h1v1h-1zM6 13h1v1h-1zM16 15h1v1h-1zM7 12h1v1h-1zM18 12h1v1h-1zM14 8h1v1h-1zM17 7h1v1h-1zM8 4h1v1h-1zM12 20h1v1h-1zM14 17h1v1h-1zM17 16h1v1h-1zM9 12h1v1h-1zM11 9h1v1h-1zM9 21h1v1h-1zM13 12h1v1h-1zM15 9h1v1h-1zM13 21h1v1h-1zM16 17h1v1h-1zM7 14h1v1h-1zM18 14h1v1h-1zM12 13h1v1h-1zM14 10h1v1h-1zM17 9h1v1h-1zM9 5h1v1h-1zM11 2h1v1h-1zM14 19h1v1h-1zM9 14h1v1h-1zM10 15h1v1h-1zM13 14h1v1h-1zM15 11h1v1h-1zM16 10h1v1h-1zM18 7h1v1h-1zM7 16h1v1h-1zM18 16h1v1h-1zM12 6h1v1h-1zM12 15h1v1h-1zM14 12h1v1h-1zM5 9h1v1h-1zM17 11h1v1h-1zM9 7h1v1h-1zM11 4h1v1h-1zM14 21h1v1h-1zM9 16h1v1h-1zM15 4h1v1h-1zM10 17h1v1h-1zM13 16h1v1h-1zM15 13h1v1h-1zM16 12h1v1h-1zM18 9h1v1h-1zM12 8h1v1h-1zM14 5h1v1h-1zM12 17h1v1h-1zM14 14h1v1h-1zM5 11h1v1h-1zM9 9h1v1h-1zM8 13h1v1h-1zM10 10h1v1h-1zM15 6h1v1h-1zM10 19h1v1h-1zM13 18h1v1h-1zM11 18h1v1h-1zM16 14h1v1h-1zM7 11h1v1h-1zM18 11h1v1h-1zM6 15h1v1h-1zM12 10h1v1h-1zM14 7h1v1h-1zM12 19h1v1h-1zM14 16h1v1h-1zM8 6h1v1h-1zM8 15h1v1h-1zM10 12h1v1h-1zM13 11h1v1h-1zM11 11h1v1h-1zM10 21h1v1h-1zM11 20h1v1h-1zM16 16h1v1h-1zM12 3h1v1h-1zM6 17h1v1h-1zM12 12h1v1h-1zM14 9h1v1h-1zM12 21h1v1h-1zM14 18h1v1h-1zM8 8h1v1h-1zM8 17h1v1h-1zM10 14h1v1h-1zM11 13h1v1h-1zM6 10h1v1h-1zM12 5h1v1h-1zM12 14h1v1h-1zM14 11h1v1h-1zM4 10h1v1h-1zM17 13h1v1h-1zM8 10h1v1h-1zM11 6h1v1h-1zM10 16h1v1h-1zM9 18h1v1h-1zM11 15h1v1h-1zM15 15h1v1h-1zM6 12h1v1h-1zM12 7h1v1h-1zM14 4h1v1h-1zM12 16h1v1h-1zM17 6h1v1h-1zM17 15h1v1h-1zM8 12h1v1h-1zM9 11h1v1h-1zM11 8h1v1h-1zM10 18h1v1h-1zM9 20h1v1h-1zM11 17h1v1h-1zM15 8h1v1h-1zM13 20h1v1h-1zM15 17h1v1h-1zM6 14h1v1h-1zM7 13h1v1h-1zM18 13h1v1h-1zM12 9h1v1h-1zM14 6h1v1h-1zM17 8h1v1h-1zM8 5h1v1h-1zM9 4h1v1h-1zM17 17h1v1h-1zM8 14h1v1h-1zM10 11h1v1h-1zM9 13h1v1h-1zM11 10h1v1h-1zM11 19h1v1h-1zM13 13h1v1h-1zM15 10h1v1h-1zM18 6h1v1h-1zM12 2h1v1h-1zM6 16h1v1h-1zM7 15h1v1h-1zM18 15h1v1h-1zM12 11h1v1h-1zM17 10h1v1h-1zM8 7h1v1h-1zM9 6h1v1h-1zM11 3h1v1h-1zM14 20h1v1h-1zM8 16h1v1h-1zM10 13h1v1h-1zM9 15h1v1h-1zM11 12h1v1h-1zM11 21h1v1h-1zM13 15h1v1h-1zM15 12h1v1h-1zM16 11h1v1h-1zM18 8h1v1h-1z" fill="#fff"/>
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges">
+                    <path d="M12 4h1v1h-1zM7 17h1v1h-1zM18 17h1v1h-1zM4 9h1v1h-1zM14 13h1v1h-1zM5 10h1v1h-1zM8 9h1v1h-1zM17 12h1v1h-1zM9 8h1v1h-1zM11 5h1v1h-1zM9 17h1v1h-1zM11 14h1v1h-1zM15 5h1v1h-1zM13 17h1v1h-1zM15 14h1v1h-1zM6 11h1v1h-1zM16 13h1v1h-1zM7 10h1v1h-1zM18 10h1v1h-1zM12 18h1v1h-1zM14 15h1v1h-1zM5 12h1v1h-1zM8 11h1v1h-1zM17 14h1v1h-1zM9 10h1v1h-1zM11 7h1v1h-1zM9 19h1v1h-1zM11 16h1v1h-1zM13 10h1v1h-1zM15 7h1v1h-1zM10 20h1v1h-1zM13 19h1v1h-1zM15 16h1v1h-1zM6 13h1v1h-1zM16 15h1v1h-1zM7 12h1v1h-1zM18 12h1v1h-1zM14 8h1v1h-1zM17 7h1v1h-1zM8 4h1v1h-1zM12 20h1v1h-1zM14 17h1v1h-1zM17 16h1v1h-1zM9 12h1v1h-1zM11 9h1v1h-1zM9 21h1v1h-1zM13 12h1v1h-1zM15 9h1v1h-1zM13 21h1v1h-1zM16 17h1v1h-1zM7 14h1v1h-1zM18 14h1v1h-1zM12 13h1v1h-1zM14 10h1v1h-1zM17 9h1v1h-1zM9 5h1v1h-1zM11 2h1v1h-1zM14 19h1v1h-1zM9 14h1v1h-1zM10 15h1v1h-1zM13 14h1v1h-1zM15 11h1v1h-1zM16 10h1v1h-1zM18 7h1v1h-1zM7 16h1v1h-1zM18 16h1v1h-1zM12 6h1v1h-1zM12 15h1v1h-1zM14 12h1v1h-1zM5 9h1v1h-1zM17 11h1v1h-1zM9 7h1v1h-1zM11 4h1v1h-1zM14 21h1v1h-1zM9 16h1v1h-1zM15 4h1v1h-1zM10 17h1v1h-1zM13 16h1v1h-1zM15 13h1v1h-1zM16 12h1v1h-1zM18 9h1v1h-1zM12 8h1v1h-1zM14 5h1v1h-1zM12 17h1v1h-1zM14 14h1v1h-1zM5 11h1v1h-1zM9 9h1v1h-1zM8 13h1v1h-1zM10 10h1v1h-1zM15 6h1v1h-1zM10 19h1v1h-1zM13 18h1v1h-1zM11 18h1v1h-1zM16 14h1v1h-1zM7 11h1v1h-1zM18 11h1v1h-1zM6 15h1v1h-1zM12 10h1v1h-1zM14 7h1v1h-1zM12 19h1v1h-1zM14 16h1v1h-1zM8 6h1v1h-1zM8 15h1v1h-1zM10 12h1v1h-1zM13 11h1v1h-1zM11 11h1v1h-1zM10 21h1v1h-1zM11 20h1v1h-1zM16 16h1v1h-1zM12 3h1v1h-1zM6 17h1v1h-1zM12 12h1v1h-1zM14 9h1v1h-1zM12 21h1v1h-1zM14 18h1v1h-1zM8 8h1v1h-1zM8 17h1v1h-1zM10 14h1v1h-1zM11 13h1v1h-1zM6 10h1v1h-1zM12 5h1v1h-1zM12 14h1v1h-1zM14 11h1v1h-1zM4 10h1v1h-1zM17 13h1v1h-1zM8 10h1v1h-1zM11 6h1v1h-1zM10 16h1v1h-1zM9 18h1v1h-1zM11 15h1v1h-1zM15 15h1v1h-1zM6 12h1v1h-1zM12 7h1v1h-1zM14 4h1v1h-1zM12 16h1v1h-1zM17 6h1v1h-1zM17 15h1v1h-1zM8 12h1v1h-1zM9 11h1v1h-1zM11 8h1v1h-1zM10 18h1v1h-1zM9 20h1v1h-1zM11 17h1v1h-1zM15 8h1v1h-1zM13 20h1v1h-1zM15 17h1v1h-1zM6 14h1v1h-1zM7 13h1v1h-1zM18 13h1v1h-1zM12 9h1v1h-1zM14 6h1v1h-1zM17 8h1v1h-1zM8 5h1v1h-1zM9 4h1v1h-1zM17 17h1v1h-1zM8 14h1v1h-1zM10 11h1v1h-1zM9 13h1v1h-1zM11 10h1v1h-1zM11 19h1v1h-1zM13 13h1v1h-1zM15 10h1v1h-1zM18 6h1v1h-1zM12 2h1v1h-1zM6 16h1v1h-1zM7 15h1v1h-1zM18 15h1v1h-1zM12 11h1v1h-1zM17 10h1v1h-1z" fill="currentColor"/>
                 </svg>
             </button>
 
             <button id="collapse-btn" class="icon-btn" title="Collapse" aria-label="Collapse chatbox">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
                     <path d="M5 12h14v2H5z" fill="#fff"/>
+                </svg>
+            </button>
+
+            <button id="drag-btn" class="icon-btn" title="Drag" aria-label="Drag chatbox">
+                <!-- Pixel 4-way arrow (move) icon (thin stroke weight to match other buttons) -->
+                <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" aria-hidden="true" focusable="false">
+                    <g fill="currentColor">
+                        <!-- thin cross (1px) -->
+                        <rect x="7" y="2" width="1" height="12"/>
+                        <rect x="2" y="7" width="12" height="1"/>
+
+                        <!-- arrowheads (filled 3px bases + 1px tips) -->
+                        <rect x="7" y="0" width="1" height="1"/> <!-- up tip -->
+                        <rect x="6" y="1" width="3" height="1"/>
+
+                        <rect x="7" y="15" width="1" height="1"/> <!-- down tip -->
+                        <rect x="6" y="14" width="3" height="1"/>
+
+                        <rect x="0" y="7" width="1" height="1"/> <!-- left tip -->
+                        <rect x="1" y="6" width="1" height="3"/>
+
+                        <rect x="15" y="7" width="1" height="1"/> <!-- right tip -->
+                        <rect x="14" y="6" width="1" height="3"/>
+                    </g>
                 </svg>
             </button>
 
             <button id="save-btn" class="icon-btn" title="Save" aria-label="Save chat">
                 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M4 3h14v4h2v14H4V3zm2 2v14h12V9h-2V5H6zm2 0h6v4H8V5zm0 8h8v2H8v-2z" fill="#fff"/>
-                </svg>
-            </button>
-
-            <button id="reset-btn" class="icon-btn" title="Reset Session" aria-label="Reset">
-                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M16 2h-2v2h2v2H4v2H2v5h2V8h12v2h-2v2h2v-2h2V8h2V6h-2V4h-2V2zM6 20h2v2h2v-2H8v-2h12v-2h2v-5h-2v5H8v-2h2v-2H8v2H6v2H4v2h2v2z" fill="#fff"/>
                 </svg>
             </button>
         </div>
@@ -669,26 +751,97 @@
                     <textarea id="prompt-input" rows="1" wrap="soft" placeholder="" autocomplete="off" spellcheck="false" disabled></textarea>
                 </div>
                 <div id="prompt-actions">
-                    <button id="gesture-btn" class="icon-btn" title="Hand Gesture Control" aria-label="Hand Gesture Control">
-                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M12 4h1v1h-1zM7 17h1v1h-1zM18 17h1v1h-1zM4 9h1v1h-1zM14 13h1v1h-1zM5 10h1v1h-1zM8 9h1v1h-1zM17 12h1v1h-1zM9 8h1v1h-1zM11 5h1v1h-1zM9 17h1v1h-1zM11 14h1v1h-1zM15 5h1v1h-1zM13 17h1v1h-1zM15 14h1v1h-1zM6 11h1v1h-1zM16 13h1v1h-1zM7 10h1v1h-1zM18 10h1v1h-1zM12 18h1v1h-1zM14 15h1v1h-1zM5 12h1v1h-1zM8 11h1v1h-1zM17 14h1v1h-1zM9 10h1v1h-1zM11 7h1v1h-1zM9 19h1v1h-1zM11 16h1v1h-1zM13 10h1v1h-1zM15 7h1v1h-1zM10 20h1v1h-1zM13 19h1v1h-1zM15 16h1v1h-1zM6 13h1v1h-1zM16 15h1v1h-1zM7 12h1v1h-1zM18 12h1v1h-1zM14 8h1v1h-1zM17 7h1v1h-1zM8 4h1v1h-1zM12 20h1v1h-1zM14 17h1v1h-1zM17 16h1v1h-1zM9 12h1v1h-1zM11 9h1v1h-1zM9 21h1v1h-1zM13 12h1v1h-1zM15 9h1v1h-1zM13 21h1v1h-1zM16 17h1v1h-1zM7 14h1v1h-1zM18 14h1v1h-1zM12 13h1v1h-1zM14 10h1v1h-1zM17 9h1v1h-1zM9 5h1v1h-1zM11 2h1v1h-1zM14 19h1v1h-1zM9 14h1v1h-1zM10 15h1v1h-1zM13 14h1v1h-1zM15 11h1v1h-1zM16 10h1v1h-1zM18 7h1v1h-1zM7 16h1v1h-1zM18 16h1v1h-1zM12 6h1v1h-1zM12 15h1v1h-1zM14 12h1v1h-1zM5 9h1v1h-1zM17 11h1v1h-1zM9 7h1v1h-1zM11 4h1v1h-1zM14 21h1v1h-1zM9 16h1v1h-1zM15 4h1v1h-1zM10 17h1v1h-1zM13 16h1v1h-1zM15 13h1v1h-1zM16 12h1v1h-1zM18 9h1v1h-1zM12 8h1v1h-1zM14 5h1v1h-1zM12 17h1v1h-1zM14 14h1v1h-1zM5 11h1v1h-1zM9 9h1v1h-1zM8 13h1v1h-1zM10 10h1v1h-1zM15 6h1v1h-1zM10 19h1v1h-1zM13 18h1v1h-1zM11 18h1v1h-1zM16 14h1v1h-1zM7 11h1v1h-1zM18 11h1v1h-1zM6 15h1v1h-1zM12 10h1v1h-1zM14 7h1v1h-1zM12 19h1v1h-1zM14 16h1v1h-1zM8 6h1v1h-1zM8 15h1v1h-1zM10 12h1v1h-1zM13 11h1v1h-1zM11 11h1v1h-1zM10 21h1v1h-1zM11 20h1v1h-1zM16 16h1v1h-1zM12 3h1v1h-1zM6 17h1v1h-1zM12 12h1v1h-1zM14 9h1v1h-1zM12 21h1v1h-1zM14 18h1v1h-1zM8 8h1v1h-1zM8 17h1v1h-1zM10 14h1v1h-1zM11 13h1v1h-1zM6 10h1v1h-1zM12 5h1v1h-1zM12 14h1v1h-1zM14 11h1v1h-1zM4 10h1v1h-1zM17 13h1v1h-1zM8 10h1v1h-1zM11 6h1v1h-1zM10 16h1v1h-1zM9 18h1v1h-1zM11 15h1v1h-1zM15 15h1v1h-1zM6 12h1v1h-1zM12 7h1v1h-1zM14 4h1v1h-1zM12 16h1v1h-1zM17 6h1v1h-1zM17 15h1v1h-1zM8 12h1v1h-1zM9 11h1v1h-1zM11 8h1v1h-1zM10 18h1v1h-1zM9 20h1v1h-1zM11 17h1v1h-1zM15 8h1v1h-1zM13 20h1v1h-1zM15 17h1v1h-1zM6 14h1v1h-1zM7 13h1v1h-1zM18 13h1v1h-1zM12 9h1v1h-1zM14 6h1v1h-1zM17 8h1v1h-1zM8 5h1v1h-1zM9 4h1v1h-1zM17 17h1v1h-1zM8 14h1v1h-1zM10 11h1v1h-1zM9 13h1v1h-1zM11 10h1v1h-1zM11 19h1v1h-1zM13 13h1v1h-1zM15 10h1v1h-1zM18 6h1v1h-1zM12 2h1v1h-1zM6 16h1v1h-1zM7 15h1v1h-1zM18 15h1v1h-1zM12 11h1v1h-1zM17 10h1v1h-1zM8 7h1v1h-1zM9 6h1v1h-1zM11 3h1v1h-1zM14 20h1v1h-1zM8 16h1v1h-1zM10 13h1v1h-1zM9 15h1v1h-1zM11 12h1v1h-1zM11 21h1v1h-1zM13 15h1v1h-1zM15 12h1v1h-1zM16 11h1v1h-1zM18 8h1v1h-1z" fill="#fff"/>
-                        </svg>
-                    </button>
                     <button id="send-btn" class="icon-btn" title="Send" aria-label="Send message">
-                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M4 11h8V9h2v2h2v2h-2v2h-2v-2H4v-2zm12 0h2v2h-2v-2zm2-2h2v6h-2V9z" fill="currentColor"/>
+                        <!-- Pixel paper-plane (white only) -->
+                        <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" aria-hidden="true" focusable="false">
+                            <g fill="currentColor">
+                                <!-- top edge -->
+                                <rect x="4" y="3" width="8" height="1"/>
+                                <rect x="5" y="4" width="7" height="1"/>
+                                <rect x="6" y="5" width="6" height="1"/>
+                                <rect x="7" y="6" width="5" height="1"/>
+                                <!-- inner body -->
+                                <rect x="6" y="7" width="5" height="1"/>
+                                <rect x="5" y="8" width="5" height="1"/>
+                                <rect x="4" y="9" width="5" height="1"/>
+                                <!-- lower fin / tail -->
+                                <rect x="3" y="10" width="4" height="1"/>
+                                <rect x="4" y="11" width="2" height="1"/>
+                                <rect x="5" y="12" width="1" height="1"/>
+                                <!-- nose accent -->
+                                <rect x="12" y="4" width="1" height="1"/>
+                                <rect x="12" y="5" width="1" height="1"/>
+                            </g>
                         </svg>
                     </button>
                 </div>
             </div>
         </div>
-        <div id="resize-handle" title="Resize" aria-label="Resize chatbox"></div>
+
+        <div id="chat-bottom-overlay" aria-hidden="true"></div>
+
+        <div id="corner-left-actions">
+            <button id="gesture-btn" class="icon-btn" title="Hand Gesture Control" aria-label="Hand Gesture Control">
+                <!-- Use a 28x28 viewBox so CSS 28x28 renders 1:1 with no fractional scaling -->
+                <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" aria-hidden="true" focusable="false">
+                    <g transform="translate(2 2)">
+                        <path d="M12 4h1v1h-1zM7 17h1v1h-1zM18 17h1v1h-1zM4 9h1v1h-1zM14 13h1v1h-1zM5 10h1v1h-1zM8 9h1v1h-1zM17 12h1v1h-1zM9 8h1v1h-1zM11 5h1v1h-1zM9 17h1v1h-1zM11 14h1v1h-1zM15 5h1v1h-1zM13 17h1v1h-1zM15 14h1v1h-1zM6 11h1v1h-1zM16 13h1v1h-1zM7 10h1v1h-1zM18 10h1v1h-1zM12 18h1v1h-1zM14 15h1v1h-1zM5 12h1v1h-1zM8 11h1v1h-1zM17 14h1v1h-1zM9 10h1v1h-1zM11 7h1v1h-1zM9 19h1v1h-1zM11 16h1v1h-1zM13 10h1v1h-1zM15 7h1v1h-1zM10 20h1v1h-1zM13 19h1v1h-1zM15 16h1v1h-1zM6 13h1v1h-1zM16 15h1v1h-1zM7 12h1v1h-1zM18 12h1v1h-1zM14 8h1v1h-1zM17 7h1v1h-1zM8 4h1v1h-1zM12 20h1v1h-1zM14 17h1v1h-1zM17 16h1v1h-1zM9 12h1v1h-1zM11 9h1v1h-1zM9 21h1v1h-1zM13 12h1v1h-1zM15 9h1v1h-1zM13 21h1v1h-1zM16 17h1v1h-1zM7 14h1v1h-1zM18 14h1v1h-1zM12 13h1v1h-1zM14 10h1v1h-1zM17 9h1v1h-1zM9 5h1v1h-1zM11 2h1v1h-1zM14 19h1v1h-1zM9 14h1v1h-1zM10 15h1v1h-1zM13 14h1v1h-1zM15 11h1v1h-1zM16 10h1v1h-1zM18 7h1v1h-1zM7 16h1v1h-1zM18 16h1v1h-1zM12 6h1v1h-1zM12 15h1v1h-1zM14 12h1v1h-1zM5 9h1v1h-1zM17 11h1v1h-1zM9 7h1v1h-1zM11 4h1v1h-1zM14 21h1v1h-1zM9 16h1v1h-1zM15 4h1v1h-1zM10 17h1v1h-1zM13 16h1v1h-1zM15 13h1v1h-1zM16 12h1v1h-1zM18 9h1v1h-1zM12 8h1v1h-1zM14 5h1v1h-1zM12 17h1v1h-1zM14 14h1v1h-1zM5 11h1v1h-1zM9 9h1v1h-1zM8 13h1v1h-1zM10 10h1v1h-1zM15 6h1v1h-1zM10 19h1v1h-1zM13 18h1v1h-1zM11 18h1v1h-1zM16 14h1v1h-1zM7 11h1v1h-1zM18 11h1v1h-1zM6 15h1v1h-1zM12 10h1v1h-1zM14 7h1v1h-1zM12 19h1v1h-1zM14 16h1v1h-1zM8 6h1v1h-1zM8 15h1v1h-1zM10 12h1v1h-1zM13 11h1v1h-1zM11 11h1v1h-1zM10 21h1v1h-1zM11 20h1v1h-1zM16 16h1v1h-1zM12 3h1v1h-1zM6 17h1v1h-1zM12 12h1v1h-1zM14 9h1v1h-1zM12 21h1v1h-1zM14 18h1v1h-1zM8 8h1v1h-1zM8 17h1v1h-1zM10 14h1v1h-1zM11 13h1v1h-1zM6 10h1v1h-1zM12 5h1v1h-1zM12 14h1v1h-1zM14 11h1v1h-1zM4 10h1v1h-1zM17 13h1v1h-1zM8 10h1v1h-1zM11 6h1v1h-1zM10 16h1v1h-1zM9 18h1v1h-1zM11 15h1v1h-1zM15 15h1v1h-1zM6 12h1v1h-1zM12 7h1v1h-1zM14 4h1v1h-1zM12 16h1v1h-1zM17 6h1v1h-1zM17 15h1v1h-1zM8 12h1v1h-1zM9 11h1v1h-1zM11 8h1v1h-1zM10 18h1v1h-1zM9 20h1v1h-1zM11 17h1v1h-1zM15 8h1v1h-1zM13 20h1v1h-1zM15 17h1v1h-1zM6 14h1v1h-1zM7 13h1v1h-1zM18 13h1v1h-1zM12 9h1v1h-1zM14 6h1v1h-1zM17 8h1v1h-1zM8 5h1v1h-1zM9 4h1v1h-1zM17 17h1v1h-1zM8 14h1v1h-1zM10 11h1v1h-1zM9 13h1v1h-1zM11 10h1v1h-1zM11 19h1v1h-1zM13 13h1v1h-1zM15 10h1v1h-1zM18 6h1v1h-1zM12 2h1v1h-1zM6 16h1v1h-1zM7 15h1v1h-1zM18 15h1v1h-1zM12 11h1v1h-1zM17 10h1v1h-1z" fill="currentColor"/>
+                    </g>
+                </svg>
+            </button>
+
+            <button id="reset-btn" class="icon-btn" title="Reset Session" aria-label="Reset">
+                <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" aria-hidden="true" focusable="false">
+                    <g transform="translate(2 2)">
+                        <path d="M16 2h-2v2h2v2H4v2H2v5h2V8h12v2h-2v2h2v-2h2V8h2V6h-2V4h-2V2zM6 20h2v2h2v-2H8v-2h12v-2h2v-5h-2v5H8v-2h2v-2H8v2H6v2H4v2h2v2z" fill="#fff"/>
+                    </g>
+                </svg>
+            </button>
+        </div>
+
+        <button id="resize-handle" title="Resize" aria-label="Resize chatbox">
+            <!-- Pixel diagonal resize icon (double-headed arrow), styled like the vertical reference but diagonal along the bottom-right handle direction -->
+            <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" aria-hidden="true" focusable="false">
+                <!-- diagonal shaft (2px thick band): top-left -> bottom-right -->
+                <rect x="5" y="5" width="1" height="1" fill="#fff"/>
+                <rect x="6" y="6" width="1" height="1" fill="#fff"/>
+                <rect x="7" y="7" width="1" height="1" fill="#fff"/>
+                <rect x="8" y="8" width="1" height="1" fill="#fff"/>
+                <rect x="9" y="9" width="1" height="1" fill="#fff"/>
+                <rect x="10" y="10" width="1" height="1" fill="#fff"/>
+                <rect x="11" y="11" width="1" height="1" fill="#fff"/>
+
+                <rect x="6" y="5" width="1" height="1" fill="#fff"/>
+                <rect x="7" y="6" width="1" height="1" fill="#fff"/>
+                <rect x="8" y="7" width="1" height="1" fill="#fff"/>
+                <rect x="9" y="8" width="1" height="1" fill="#fff"/>
+                <rect x="10" y="9" width="1" height="1" fill="#fff"/>
+                <rect x="11" y="10" width="1" height="1" fill="#fff"/>
+                <rect x="12" y="11" width="1" height="1" fill="#fff"/>
+
+                <!-- arrowhead (top-left / NW) -->
+                <rect x="4" y="4" width="1" height="1" fill="#fff"/>
+                <rect x="5" y="4" width="1" height="1" fill="#fff"/>
+                <rect x="6" y="4" width="1" height="1" fill="#fff"/>
+                <rect x="4" y="5" width="1" height="1" fill="#fff"/>
+                <rect x="4" y="6" width="1" height="1" fill="#fff"/>
+                <rect x="5" y="5" width="1" height="1" fill="#fff"/>
+
+                <!-- arrowhead (bottom-right / SE) -->
+                <rect x="12" y="12" width="1" height="1" fill="#fff"/>
+                <rect x="11" y="12" width="1" height="1" fill="#fff"/>
+                <rect x="10" y="12" width="1" height="1" fill="#fff"/>
+                <rect x="12" y="11" width="1" height="1" fill="#fff"/>
+                <rect x="12" y="10" width="1" height="1" fill="#fff"/>
+                <rect x="11" y="11" width="1" height="1" fill="#fff"/>
+            </svg>
+        </button>
     </div>
 
     <div id="citation-tooltip"></div>
     <video id="gesture-video" style="display:none" playsinline muted></video>
 
-    <script src="//cdn.jsdelivr.net/npm/force-graph"></script>
+    <script src="https://cdn.jsdelivr.net/npm/force-graph"></script>
     <script>
     (function() {
         'use strict';
@@ -805,9 +958,16 @@
         const promptWrap = document.getElementById('prompt-input-wrap');
         const sendBtn = document.getElementById('send-btn');
         const collapseBtn = document.getElementById('collapse-btn');
+        const dragBtn = document.getElementById('drag-btn');
         const saveBtn = document.getElementById('save-btn');
         const resizeHandle = document.getElementById('resize-handle');
         const chatHeader = chatbox ? chatbox.querySelector('.chat-header') : null;
+
+        // Improve pixel-crisp rendering for the gesture icon by converting its dense pixel-path into rects.
+        try {
+            const gestureSvg = document.querySelector('#corner-left-actions #gesture-btn svg');
+            convertPixelPathToRects(gestureSvg);
+        } catch (_) {}
 
         let chatboxCollapsed = false;
         let lastExpandedHeight = null;
@@ -817,6 +977,81 @@
 
         function escapeHtml(str = '') {
             return String(str).replace(/[&<>"']/g, ch => htmlEscapes[ch]);
+        }
+
+        function convertPixelPathToRects(svgEl) {
+            // Some browsers can drop/anti-alias 1x1 subpaths inside a single <path> even at 1:1 sizing.
+            // Converting the pixel-art path to <rect> elements makes the icon reliably crisp.
+            if (!svgEl) return false;
+
+            const path = svgEl.querySelector('path');
+            if (!path) return false;
+
+            const d = path.getAttribute('d') || '';
+            const re = /M(\d+)\s+(\d+)h1v1h-1z/g;
+
+            let m;
+            const coords = [];
+            const seen = new Set();
+            while ((m = re.exec(d))) {
+                const x = Number(m[1]);
+                const y = Number(m[2]);
+                const k = `${x},${y}`;
+                if (seen.has(k)) continue;
+                seen.add(k);
+                coords.push({ x, y });
+            }
+
+            if (!coords.length) return false;
+
+            const ns = 'http://www.w3.org/2000/svg';
+            const parent = path.parentNode;
+
+            // Prefer replacing within an existing <g> (keeps transforms like translate(2 2)).
+            const g = (parent && parent.nodeType === 1 && parent.nodeName.toLowerCase() === 'g')
+                ? parent
+                : null;
+
+            const target = g || svgEl;
+
+            // Remove the original path.
+            try { path.remove(); } catch (_) { if (path.parentNode) path.parentNode.removeChild(path); }
+
+            if (target === svgEl) {
+                // If there was no group, clear any remaining contents to avoid mixing nodes.
+                while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+            }
+
+            if (target.nodeName.toLowerCase() === 'g') {
+                target.setAttribute('fill', 'currentColor');
+                target.setAttribute('shape-rendering', 'crispEdges');
+            } else {
+                // Wrap in a group so fill can be inherited cleanly.
+                const wrap = document.createElementNS(ns, 'g');
+                wrap.setAttribute('fill', 'currentColor');
+                wrap.setAttribute('shape-rendering', 'crispEdges');
+                svgEl.appendChild(wrap);
+                coords.forEach(({ x, y }) => {
+                    const r = document.createElementNS(ns, 'rect');
+                    r.setAttribute('x', String(x));
+                    r.setAttribute('y', String(y));
+                    r.setAttribute('width', '1');
+                    r.setAttribute('height', '1');
+                    wrap.appendChild(r);
+                });
+                return true;
+            }
+
+            coords.forEach(({ x, y }) => {
+                const r = document.createElementNS(ns, 'rect');
+                r.setAttribute('x', String(x));
+                r.setAttribute('y', String(y));
+                r.setAttribute('width', '1');
+                r.setAttribute('height', '1');
+                target.appendChild(r);
+            });
+
+            return true;
         }
 
         function formatText(str = '') {
@@ -3056,7 +3291,8 @@
         }
 
         function enableDragging() {
-            const dragHandle = chatbox;
+            if (!dragBtn || !chatbox) return;
+
             let pointerId = null;
             let offsetX = 0;
             let offsetY = 0;
@@ -3072,24 +3308,18 @@
 
             const endDrag = e => {
                 if (pointerId === null || (e && e.pointerId !== pointerId)) return;
-                dragHandle.releasePointerCapture(pointerId);
+                try { dragBtn.releasePointerCapture(pointerId); } catch (_) {}
                 pointerId = null;
                 chatbox.classList.remove('dragging');
                 updateChatboxRect();
-                // No explicit cooldown needed; force-graph handles cooling down internally.
             };
 
-            dragHandle.addEventListener('pointerdown', e => {
-                // Allow dragging from header or the box border/background itself,
-                // but NOT from text selection areas or inputs
-                const target = e.target;
-                const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.closest('input, textarea');
-                const isLog = target.closest('#chat-log');
-                const isLink = target.closest('a') || target.closest('button') || target.closest('.citation-ref');
-                const isResize = target.closest('#resize-handle');
+            // Prevent click-to-focus from stealing focus when interacting with drag handle.
+            dragBtn.addEventListener('click', (e) => e.stopPropagation());
 
-                // If clicking log, input, resize handle, or interactive elements, don't drag
-                if (isInput || isLog || isResize || isLink || target.closest('#reset-btn')) return;
+            dragBtn.addEventListener('pointerdown', e => {
+                e.stopPropagation();
+                e.preventDefault();
 
                 pointerId = e.pointerId;
                 const rect = chatbox.getBoundingClientRect();
@@ -3097,14 +3327,14 @@
                 offsetY = e.clientY - rect.top;
 
                 chatbox.classList.add('dragging');
-                dragHandle.setPointerCapture(pointerId);
-                if (Graph && typeof Graph.d3ReheatSimulation === 'function') Graph.d3ReheatSimulation(); // Wake up
+                dragBtn.setPointerCapture(pointerId);
+                if (Graph && typeof Graph.d3ReheatSimulation === 'function') Graph.d3ReheatSimulation();
             });
 
-            dragHandle.addEventListener('pointermove', onPointerMove);
-            dragHandle.addEventListener('pointerup', endDrag);
-            dragHandle.addEventListener('pointercancel', endDrag);
-            dragHandle.addEventListener('pointerleave', endDrag);
+            dragBtn.addEventListener('pointermove', onPointerMove);
+            dragBtn.addEventListener('pointerup', endDrag);
+            dragBtn.addEventListener('pointercancel', endDrag);
+            dragBtn.addEventListener('lostpointercapture', endDrag);
 
             new ResizeObserver(() => updateChatboxRect()).observe(chatbox);
         }
@@ -3119,7 +3349,6 @@
             let startTop = 0;
             let startWidth = 0;
             let startHeight = 0;
-            let startRight = 0;
 
             const MIN_W = 280;
             const MIN_H = 150;
@@ -3130,14 +3359,13 @@
                 const dx = e.clientX - startX;
                 const dy = e.clientY - startY;
 
-                const maxW = Math.max(MIN_W, startRight - 10);
+                // Bottom-right resize: width/height change, left/top stay fixed.
+                const maxW = Math.max(MIN_W, window.innerWidth - startLeft - 10);
                 const maxH = Math.max(MIN_H, window.innerHeight - startTop - 10);
 
-                const nextW = clamp(startWidth - dx, MIN_W, maxW);
+                const nextW = clamp(startWidth + dx, MIN_W, maxW);
                 const nextH = clamp(startHeight + dy, MIN_H, maxH);
-                const nextLeft = clamp(startRight - nextW, 10, startRight - MIN_W);
 
-                chatbox.style.left = `${nextLeft}px`;
                 chatbox.style.width = `${nextW}px`;
                 chatbox.style.height = `${nextH}px`;
                 updateChatboxRect();
@@ -3162,7 +3390,6 @@
                 startTop = chatbox.offsetTop;
                 startWidth = chatbox.offsetWidth;
                 startHeight = chatbox.offsetHeight;
-                startRight = startLeft + startWidth;
 
                 resizeHandle.setPointerCapture(pointerId);
                 if (Graph && typeof Graph.d3ReheatSimulation === 'function') Graph.d3ReheatSimulation();
