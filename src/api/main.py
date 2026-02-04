@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .ws import router as ws_router, set_agent
+from .ws import router as ws_router, set_agent, set_philosopher_agent
 
 
 # --- Pydantic Models ---
@@ -156,8 +156,9 @@ def init_components():
     )
     state.openai_client = client
 
-    # Share agent with WebSocket module
+    # Share agents with WebSocket module
     set_agent(state.agent)
+    set_philosopher_agent(state.philosopher_agent)
 
     state.ready = True
     print("✅ PhilosophAI ready!")

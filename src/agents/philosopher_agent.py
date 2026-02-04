@@ -378,12 +378,21 @@ class PhilosopherAgent:
         self._traversal_path: list[str] = []  # Stack of visited node IDs
         self._traversal_history: list[dict] = []  # Full history with context
         self._current_node: str | None = None  # Current position in graph
+        self._event_handler: Callable[[dict], None] | None = None
 
     def reset_session(self):
         """Full reset of the session, including conversation history."""
         self._reset_state()
         self._last_qas = []
         trace_logger.info("[AGENT] 🔄 Session fully reset (history cleared)")
+
+    def _emit_event(self, payload: dict):
+        if not self._event_handler:
+            return
+        try:
+            self._event_handler(payload)
+        except Exception:
+            pass
 
     def _reset_state(self):
         """Reset state for a new query."""
@@ -619,6 +628,11 @@ class PhilosopherAgent:
             self._collected_chunks.extend(cited)
             self._collected_chunks = list(dict.fromkeys(self._collected_chunks))
             trace_logger.info(f"[AGENT] 🛰️ Community routing: {len(comm_ids)} communities (scoped={scoped})")
+            self._emit_event({
+                "type": "routing",
+                "communities": comm_ids,
+                "scores": scores,
+            })
             lines = [f"Communities (top {len(comm_ids)}):"]
             for cid, s in zip(comm_ids, scores):
                 lines.append(f"  - community {cid} | score={s:.3f}")
@@ -641,6 +655,10 @@ class PhilosopherAgent:
                 entity_ids = [e["entity_id"] for e in entities]
                 self._collected_entities.extend(entity_ids)
                 self._collected_entities = list(dict.fromkeys(self._collected_entities))
+                self._emit_event({
+                    "type": "entities",
+                    "entities": entity_ids,
+                })
 
                 trace_logger.info(f"[AGENT] 🏷️ Extracted {len(entities)} scored entities")
                 if entities:
@@ -668,6 +686,10 @@ class PhilosopherAgent:
                 trace_logger.info(f"[AGENT] 🏷️ Extracted {len(entity_ids)} entities (unscored)")
                 if self._current_phase == Phase.RETRIEVAL and entity_ids:
                     self._advance_phase(Phase.TRAVERSAL)
+                self._emit_event({
+                    "type": "entities",
+                    "entities": entity_ids,
+                })
                 return f"Found {len(entity_ids)} entities (provide query parameter for relevance scoring)."
 
         elif name == "get_chunk_content":
@@ -709,9 +731,15 @@ class PhilosopherAgent:
 
             # Track explored edges (only in-scope ones for strict scope)
             added_in_scope = 0
+            new_edges = []
             for n in data["neighbors"]:
                 if n.get("in_scope", True):  # Only track in-scope edges
                     self._traversed_edges.append({
+                        "source": source_id,
+                        "target": n["node_id"],
+                        "label": n["predicate"],
+                    })
+                    new_edges.append({
                         "source": source_id,
                         "target": n["node_id"],
                         "label": n["predicate"],
@@ -727,6 +755,35 @@ class PhilosopherAgent:
             trace_logger.info(f"[AGENT] 🕸️ Expand node: {data['label']} (community={data['community_id']}, in_scope={node_in_scope})")
             trace_logger.info(f"[AGENT]    Edges: {data.get('total_neighbors', len(data['neighbors']))} total, {data.get('in_scope_neighbors', '?')} in-scope")
             trace_logger.info(f"[AGENT]    Path: {' → '.join(self._traversal_path[-5:])}")
+
+            traversal_nodes = []
+            graph = self.agent_tools.graph
+            node_to_community = self.agent_tools.node_to_community
+            if source_id:
+                traversal_nodes.append({
+                    "id": source_id,
+                    "label": source_label,
+                    "community": data.get("community_id"),
+                    "degree": graph.degree(source_id) if graph is not None and source_id in graph else 0,
+                })
+            for n in data["neighbors"]:
+                nid = n.get("node_id")
+                if not nid:
+                    continue
+                traversal_nodes.append({
+                    "id": nid,
+                    "label": n.get("label", nid),
+                    "community": node_to_community.get(nid),
+                    "degree": graph.degree(nid) if graph is not None and nid in graph else 0,
+                })
+
+            if new_edges or traversal_nodes:
+                self._emit_event({
+                    "type": "traversal",
+                    "traversal": {"edges": new_edges},
+                    "traversal_nodes": traversal_nodes,
+                    "collected_entities": [source_id] + [e["target"] for e in new_edges],
+                })
 
             lines = [f"Node: {data['label']} (community: {data['community_id']})"]
             lines.append(f"Traversal position: step {len(self._traversal_path)} | path: {' → '.join(self._traversal_path[-3:])}")
@@ -909,6 +966,12 @@ class PhilosopherAgent:
             # while preserving graph state (_traversal_path, etc.)
             self._current_phase = Phase.RETRIEVAL
 
+        if self._event_handler:
+            self._emit_event({
+                "type": "session",
+                "session_continued": session_continued,
+            })
+
         if not self.llm_client:
             raise ValueError("LLM client not provided")
 
@@ -1070,14 +1133,26 @@ class PhilosopherAgent:
         Returns:
             Dict with answer, citations, and reasoning trace
         """
+        self._event_handler = on_event
         on_event({"type": "status", "message": "Starting agentic query..."})
 
-        # For now, run non-streaming and emit events
-        # TODO: Implement true streaming with OpenAI streaming API
-        result = self.query(question, max_iterations)
+        try:
+            # For now, run non-streaming and emit events
+            # TODO: Implement true streaming with OpenAI streaming API
+            result = self.query(question, max_iterations)
 
-        on_event({"type": "complete", "message": "Query complete"})
-        return result
+            on_event({
+                "type": "complete",
+                "answer": result.get("answer"),
+                "citations": result.get("citations", []),
+                "traversal": result.get("traversal", {}),
+                "traversal_nodes": result.get("traversal_nodes", []),
+                "collected_entities": result.get("collected_entities", []),
+                "session_continued": result.get("session_continued", False),
+            })
+            return result
+        finally:
+            self._event_handler = None
 
     def _is_irrelevant_query(self, question: str) -> bool:
         """Heuristic guardrail for non-philosophy small talk or off-domain asks."""

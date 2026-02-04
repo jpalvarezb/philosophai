@@ -231,6 +231,30 @@
             white-space: pre-wrap;
             word-break: break-word;
         }
+        .chat-line .line-text p {
+            margin: 0 0 0.6em 0;
+        }
+        .chat-line .line-text p:last-child {
+            margin-bottom: 0;
+        }
+        .chat-line .line-text ul,
+        .chat-line .line-text ol {
+            margin: 0 0 0.6em 1.2em;
+            padding: 0;
+        }
+        .chat-line .line-text code {
+            background: rgba(255, 255, 255, 0.12);
+            padding: 0 4px;
+        }
+        .chat-line .line-text pre {
+            background: #000;
+            border: 1px solid #fff;
+            padding: 8px;
+            overflow: auto;
+        }
+        .chat-line .line-text a {
+            color: #00ff8a;
+        }
 
         .chat-line.thinking .line-text {
             color: #fff;
@@ -843,11 +867,15 @@
     <video id="gesture-video" style="display:none" playsinline muted></video>
 
     <script src="https://cdn.jsdelivr.net/npm/force-graph"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
     <script>
     (function() {
         'use strict';
 
         const API_BASE = 'http://localhost:8000';
+        const WS_BASE = API_BASE.replace(/^http/, 'ws');
+        const AGENT_WS_URL = `${WS_BASE}/api/ws/agent`;
         let Graph;
         let graphData = { nodes: [], links: [] };
         let nodesById = {};
@@ -979,6 +1007,21 @@
         function escapeHtml(str = '') {
             return String(str).replace(/[&<>"']/g, ch => htmlEscapes[ch]);
         }
+        const markdownOptions = { gfm: true, breaks: true, headerIds: false, mangle: false };
+        if (window.marked && typeof marked.setOptions === 'function') {
+            marked.setOptions(markdownOptions);
+        }
+        function renderMarkdown(str = '') {
+            const input = String(str ?? '');
+            if (window.marked) {
+                const html = marked.parse(input, markdownOptions);
+                if (window.DOMPurify) {
+                    return DOMPurify.sanitize(html);
+                }
+                return html;
+            }
+            return escapeHtml(input).replace(/(?:\r\n|\r|\n)/g, '<br>');
+        }
 
         function convertPixelPathToRects(svgEl) {
             // Some browsers can drop/anti-alias 1x1 subpaths inside a single <path> even at 1:1 sizing.
@@ -1056,7 +1099,7 @@
         }
 
         function formatText(str = '') {
-            return escapeHtml(str).replace(/(?:\r\n|\r|\n)/g, '<br>');
+            return renderMarkdown(str);
         }
 
         function setLineContent(el, text, { trusted = false } = {}) {
@@ -1069,7 +1112,7 @@
             const prompt = document.createElement('span');
             prompt.className = 'prompt-symbol';
             prompt.textContent = '>';
-            const textEl = document.createElement('span');
+            const textEl = document.createElement('div');
             textEl.className = 'line-text';
             if (text) setLineContent(textEl, text, options);
             line.appendChild(prompt);
@@ -1135,7 +1178,7 @@
                     : `[${n}]`;
             };
 
-            let out = text;
+            let out = renderMarkdown(text);
 
             // Replace [[chunk_id]] or [chunk_id] with numeric citations if we have a mapping
             out = out.replace(/\[\[([^\]]+)\]\]|\[([^\]]+)\]/g, (match, g1, g2) => {
@@ -2304,25 +2347,27 @@
             // defer graph reset until we know if it's a follow-up
 
             const thinker = startThinkingLine();
+            let ws = null;
+            let finished = false;
+            let sessionInfoReceived = false;
 
-            try {
-                const res = await fetch(`${API_BASE}/api/agent/query`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question, max_iterations: 25, verbose: false, require_traversal: true, min_hops: 1 })
-                });
+            const resetForNewSession = () => {
+                traversalNodes.clear();
+                traversalLinks.clear();
+                highlightNodes.clear();
+                resetGraphToBase();
+            };
 
-                if (!res.ok) throw new Error('Query failed');
+            const finishError = (msg) => {
+                if (finished) return;
+                finished = true;
+                thinker.complete(`Error: ${msg || 'Unknown error'}`);
+                enablePrompt();
+            };
 
-                const data = await res.json();
-
-                // If not continuing session, reset graph
-                if (!data.session_continued) {
-                    traversalNodes.clear();
-                    traversalLinks.clear();
-                    highlightNodes.clear();
-                    resetGraphToBase();
-                }
+            const finishAnswer = (data) => {
+                if (finished) return;
+                finished = true;
 
                 const localCitations = data.citations || [];
                 citationData = localCitations;
@@ -2334,26 +2379,88 @@
                         }
                     });
                 }
-                processTraversal(data);
+
+                if (data.traversal || data.traversal_nodes || data.collected_entities) {
+                    processTraversal(data);
+                }
 
                 const formattedAnswer = sanitizeAnswer(data.answer, localCitations, { answerId }) || '...';
                 thinker.complete(formattedAnswer, { trusted: true });
                 setupCitationHover();
-
-                // if (traversalNodes.size > 0) {
-                //     const edgeCount = Array.isArray(data.traversal?.edges) ? data.traversal.edges.length : traversalLinks.size;
-                //     const suffix = edgeCount > 0 ? ` // ${edgeCount} edges` : '';
-                //     appendLine('system', `Traversal ${traversalNodes.size} nodes${suffix}`);
-                // }
-            } catch (err) {
-                thinker.complete(`Error: ${err.message}`);
-            } finally {
                 enablePrompt();
+            };
+
+            try {
+                ws = new WebSocket(AGENT_WS_URL);
+            } catch (err) {
+                finishError(err.message);
+                return;
             }
+
+            ws.addEventListener('open', () => {
+                ws.send(JSON.stringify({ question, max_iterations: 25 }));
+            });
+
+            ws.addEventListener('message', (event) => {
+                let msg = null;
+                try { msg = JSON.parse(event.data); } catch (_) {}
+                if (!msg || !msg.type) return;
+
+                if (msg.type === 'session') {
+                    sessionInfoReceived = true;
+                    if (!msg.session_continued) resetForNewSession();
+                    return;
+                }
+
+                if (msg.type === 'entities') {
+                    const entities = msg.entities || msg.collected_entities || [];
+                    if (entities.length) processTraversal({ collected_entities: entities });
+                    return;
+                }
+
+                if (msg.type === 'traversal') {
+                    processTraversal(msg);
+                    return;
+                }
+
+                if (msg.type === 'complete') {
+                    if (!sessionInfoReceived && msg.session_continued === false) {
+                        resetForNewSession();
+                    }
+                    finishAnswer(msg);
+                    try { ws.close(); } catch (_) {}
+                    return;
+                }
+
+                if (msg.type === 'error') {
+                    finishError(msg.message);
+                    try { ws.close(); } catch (_) {}
+                }
+            });
+
+            ws.addEventListener('error', () => {
+                finishError('WebSocket connection failed');
+            });
+
+            ws.addEventListener('close', () => {
+                if (!finished) finishError('WebSocket closed');
+            });
         }
 
         function processTraversal(data) {
             if (!data) return;
+            if (Array.isArray(data.traversal_nodes)) {
+                data.traversal_nodes.forEach(n => {
+                    if (!n || n.id == null) return;
+                    const id = String(n.id);
+                    const normalized = { ...n, id, label: n.label || id };
+                    const cached = allKnownNodes.get(id) || {};
+                    allKnownNodes.set(id, { ...cached, ...normalized });
+                    if (nodesById[id]) {
+                        Object.assign(nodesById[id], normalized);
+                    }
+                });
+            }
 
             if (data.traversal && Array.isArray(data.traversal.edges)) {
                 data.traversal.edges.forEach(edge => {

@@ -8,18 +8,25 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 if TYPE_CHECKING:
-    from ..agents import MultiHopAgent
+    from ..agents import MultiHopAgent, PhilosopherAgent
 
 router = APIRouter()
 
 # Agent instance (set by main.py at startup)
 _agent: "MultiHopAgent | None" = None
+_philosopher_agent: "PhilosopherAgent | None" = None
 
 
 def set_agent(agent: "MultiHopAgent"):
     """Set the agent instance for WebSocket handlers."""
     global _agent
     _agent = agent
+
+
+def set_philosopher_agent(agent: "PhilosopherAgent"):
+    """Set the philosopher agent instance for WebSocket handlers."""
+    global _philosopher_agent
+    _philosopher_agent = agent
 
 
 class ConnectionManager:
@@ -140,6 +147,83 @@ async def websocket_query(websocket: WebSocket):
                 "citations": result["citations"],
                 "trace": trace,
             })
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as e:
+        try:
+            await manager.send_json(websocket, {
+                "type": "error",
+                "message": str(e),
+            })
+        except:
+            pass
+        manager.disconnect(websocket)
+
+
+@router.websocket("/ws/agent")
+async def websocket_agent(websocket: WebSocket):
+    """
+    WebSocket endpoint for streaming agentic query execution.
+    
+    Client sends: {"question": "...", "max_iterations": 25}
+    Server streams: {"type": "status|thought|routing|traversal|complete|error", ...}
+    """
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            request = json.loads(data)
+            question = request.get("question", "")
+            max_iterations = request.get("max_iterations", 25)
+
+            if not question:
+                await manager.send_json(websocket, {
+                    "type": "error",
+                    "message": "No question provided",
+                })
+                continue
+
+            if not _philosopher_agent:
+                await manager.send_json(websocket, {
+                    "type": "error",
+                    "message": "Agent not initialized",
+                })
+                continue
+
+            loop = asyncio.get_event_loop()
+            queue: asyncio.Queue[dict] = asyncio.Queue()
+            done = asyncio.Event()
+
+            def emit_event(event: dict):
+                loop.call_soon_threadsafe(queue.put_nowait, event)
+
+            async def sender():
+                while True:
+                    if done.is_set() and queue.empty():
+                        break
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        continue
+                    await manager.send_json(websocket, event)
+
+            sender_task = asyncio.create_task(sender())
+
+            def run_query():
+                try:
+                    _philosopher_agent.query_streaming(
+                        question=question,
+                        on_event=emit_event,
+                        max_iterations=max_iterations,
+                    )
+                except Exception as e:
+                    emit_event({"type": "error", "message": str(e)})
+                finally:
+                    loop.call_soon_threadsafe(done.set)
+
+            await loop.run_in_executor(None, run_query)
+            await sender_task
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
