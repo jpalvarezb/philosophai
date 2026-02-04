@@ -269,7 +269,7 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
 ]
 
 
-SYSTEM_PROMPT = """You are **Phil**, a scholarly knowledge agent for philosophy, theology, history, and culture.
+SYSTEM_PROMPT = """You are **Philo**, a scholarly knowledge agent for philosophy, theology, history, and culture.
 You reason rigorously, cite evidence, and traverse a knowledge graph of concepts, authors, works, and ideas.
 
 SAFETY & ETHICS (CRITICAL)
@@ -409,11 +409,11 @@ class PhilosopherAgent:
     def generate_greeting(self) -> str:
         """Short, varied self-intro inviting the user to ask a question."""
         if not self.llm_client:
-            return "Phil online—I'll walk the graph, cite inline. What should we explore?"
+            return "Philo online—I'll walk the graph, cite inline. What should we explore?"
         system_msg = SYSTEM_PROMPT + (
             "\n\nGREET QUICKLY:\n"
             "- Output exactly one sentence, under 22 words.\n"
-            "- Introduce yourself as Phil and mention your areas of focus.\n"
+            "- Introduce yourself as Philo and mention your areas of focus.\n"
             "- End by inviting the user's question.\n"
             "- No citations, markdown, bullets, or lists."
         )
@@ -430,7 +430,7 @@ class PhilosopherAgent:
             text = resp.choices[0].message.content.strip()
             return text[:200]
         except Exception:
-            return "Phil here—graph-walking with inline citations. What topic do you want to probe?"
+            return "Philo here—graph-walking with inline citations. What topic do you want to probe?"
 
     def _check_phase(self, tool_name: str) -> str | None:
         """Check if tool is allowed in current phase. Returns error message if not."""
@@ -1107,7 +1107,7 @@ class PhilosopherAgent:
 
     def _reject_irrelevant(self, question: str) -> dict:
         """Return a short guardrail response without invoking the LLM."""
-        message = "Phil focuses on philosophy, theology, history, and culture. Ask about ideas, thinkers, or texts."
+        message = "Philo focuses on philosophy, theology, history, and culture. Ask about ideas, thinkers, or texts."
         return {
             "answer": message,
             "citations": [],
@@ -1123,7 +1123,7 @@ class PhilosopherAgent:
 
     def _llm_guard_check(self, question: str) -> str:
         """
-        Ask the LLM to classify if the query is in Phil's domain.
+        Ask the LLM to classify if the query is in Philo's domain.
         Returns "in" or "out".
         """
         try:
@@ -1133,7 +1133,7 @@ class PhilosopherAgent:
                     {
                         "role": "system",
                         "content": (
-                            "Classify if the user query is within Phil's scope: philosophy, theology, history, culture.\n"
+                            "Classify if the user query is within Philo's scope: philosophy, theology, history, culture.\n"
                             "Respond with exactly one token: IN or OUT."
                         ),
                     },
@@ -1152,7 +1152,7 @@ class PhilosopherAgent:
         LLM-crafted redirect when the query is out of scope.
         Uses SYSTEM_PROMPT for persona consistency; keeps it to <=2 sentences.
         """
-        fallback = "Phil focuses on philosophy, theology, history, and culture. Ask about ideas, thinkers, or texts."
+        fallback = "Philo focuses on philosophy, theology, history, and culture. Ask about ideas, thinkers, or texts."
         if not self.llm_client:
             return fallback
         try:

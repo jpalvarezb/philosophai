@@ -141,8 +141,8 @@
         .chat-header {
             padding: 24px 16px;
             border-bottom: 3px solid #fff;
-            font-size: 10px;
-            letter-spacing: 0.08em;
+            font-size: 12px;
+            letter-spacing: 0.06em;
             text-transform: none;
             color: #fff;
             display: flex;
@@ -153,7 +153,7 @@
 
         .chat-header span:first-child {
             font-family: 'Press Start 2P', monospace;
-            font-size: 10px;
+            font-size: 12px;
             font-weight: normal;
             letter-spacing: 0;
         }
@@ -169,10 +169,11 @@
         #chat-log {
             max-height: 60vh;
             padding: 14px 16px 20px 16px;
-            padding-bottom: calc(20px + var(--chat-bottom-safe));
-            scroll-padding-bottom: var(--chat-bottom-safe);
+            /* Keep the scrollbar/viewport above the bottom overlay area */
+            margin-bottom: var(--chat-bottom-safe);
+
             overflow-y: auto;
-            font-size: 14px;
+            font-size: var(--chat-font-sm, 16px);
             scrollbar-width: thin;
             scrollbar-color: #fff transparent;
             image-rendering: pixelated;
@@ -195,7 +196,7 @@
         #chat-log::-webkit-scrollbar { width: 6px; }
         #chat-log::-webkit-scrollbar-thumb {
             background: rgba(255, 255, 255, 0.4);
-            border-radius: 3px;
+            border-radius: 0;
         }
 
         .chat-line {
@@ -328,8 +329,8 @@
             max-height: 92vh;
 
             --chat-scale: 1;
-            --chat-font-lg: calc(18px * var(--chat-scale));
-            --chat-font-sm: calc(14px * var(--chat-scale));
+            --chat-font-lg: calc(20px * var(--chat-scale));
+            --chat-font-sm: calc(16px * var(--chat-scale));
 
             /* Space to keep chat content clear of bottom overlay controls (gesture/reset + resize handle). */
             --chat-bottom-safe: 72px;
@@ -363,7 +364,7 @@
             justify-content: space-between;
         }
         .chat-header span:first-child {
-            font-size: calc(10px * var(--chat-scale));
+            font-size: calc(12px * var(--chat-scale));
         }
 
         .icon-btn {
@@ -698,7 +699,7 @@
 
     <div id="chatbox" role="region" aria-label="Conversation window">
         <div class="chat-header">
-            <span>PHIL KNOWLEDGE SYSTEM</span>
+            <span>PHILO-001</span>
 
             <!-- Legacy header gesture button (hidden via CSS). Gesture control is bottom-right. -->
             <button id="gesture-btn-header" class="icon-btn" title="Hand Gesture Control" aria-label="Hand Gesture Control">
@@ -3182,7 +3183,7 @@
             const baseH = 520;
             const area = Math.max(1, width * height);
             const baseArea = baseW * baseH;
-            const next = clamp(Math.sqrt(area / baseArea), 0.75, 1.6);
+            const next = clamp(Math.sqrt(area / baseArea), 0.9, 1.6);
             chatbox.style.setProperty('--chat-scale', String(next));
         }
 

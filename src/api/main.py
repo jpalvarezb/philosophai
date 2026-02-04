@@ -175,9 +175,9 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(
-        title="PhilosophAI",
+        title="PHILO-001",
         description="Knowledge Graph RAG with Community Routing",
-        version="0.3.1",
+        version="0.6.2",
         lifespan=lifespan,
     )
 
@@ -232,7 +232,7 @@ def create_app() -> FastAPI:
     async def agent_query(request: AgentQueryRequest):
         """
         Execute an agentic query with sequential thinking.
-        
+
         This endpoint uses CrewAI to orchestrate tool calling with
         explicit reasoning steps. The agent:
         1. Determines appropriate scope by calling list_available_sources
@@ -240,7 +240,7 @@ def create_app() -> FastAPI:
         3. Searches for relevant evidence
         4. Explores the knowledge graph
         5. Synthesizes an answer with citations
-        
+
         All reasoning is documented via the sequential_thinking tool.
         """
         if not state.ready or not state.philosopher_agent:
