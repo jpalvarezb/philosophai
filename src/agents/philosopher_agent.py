@@ -394,6 +394,72 @@ class PhilosopherAgent:
         except Exception:
             pass
 
+    def _normalize_entity_list(self, entities: list) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for e in entities or []:
+            if e is None:
+                continue
+            eid = str(e)
+            if not eid or eid in seen:
+                continue
+            seen.add(eid)
+            normalized.append(eid)
+        return normalized
+
+    def _normalize_node_list(self, nodes: list) -> list[dict]:
+        normalized: dict[str, dict] = {}
+        for n in nodes or []:
+            if n is None:
+                continue
+            if isinstance(n, dict):
+                if n.get("id") is None:
+                    continue
+                nid = str(n.get("id"))
+                if not nid:
+                    continue
+                node = dict(n)
+                node["id"] = nid
+                node["label"] = node.get("label", nid)
+                normalized[nid] = node
+            else:
+                nid = str(n)
+                if not nid:
+                    continue
+                if nid not in normalized:
+                    normalized[nid] = {"id": nid, "label": nid}
+        return list(normalized.values())
+
+    def _normalize_edge_list(self, edges: list) -> list[dict]:
+        normalized: list[dict] = []
+        for e in edges or []:
+            if not isinstance(e, dict):
+                continue
+            s = e.get("source")
+            t = e.get("target")
+            if s is None or t is None:
+                continue
+            src = str(s)
+            tgt = str(t)
+            if not src or not tgt:
+                continue
+            edge = dict(e)
+            edge["source"] = src
+            edge["target"] = tgt
+            normalized.append(edge)
+        return normalized
+
+    def _ensure_nodes_for_edges(self, nodes: list[dict], edges: list[dict]) -> list[dict]:
+        by_id: dict[str, dict] = {n["id"]: n for n in (nodes or []) if isinstance(n, dict) and n.get("id")}
+        for e in edges or []:
+            src = e.get("source")
+            tgt = e.get("target")
+            if src and src not in by_id:
+                by_id[src] = {"id": src, "label": src}
+            if tgt and tgt not in by_id:
+                by_id[tgt] = {"id": tgt, "label": tgt}
+        return list(by_id.values())
+
     def _reset_state(self):
         """Reset state for a new query."""
         self._current_phase = Phase.SESSION
@@ -778,11 +844,17 @@ class PhilosopherAgent:
                 })
 
             if new_edges or traversal_nodes:
+                normalized_edges = self._normalize_edge_list(new_edges)
+                normalized_nodes = self._normalize_node_list(traversal_nodes)
+                normalized_nodes = self._ensure_nodes_for_edges(normalized_nodes, normalized_edges)
+                collected_entities = self._normalize_entity_list(
+                    [source_id] + [e.get("target") for e in normalized_edges]
+                )
                 self._emit_event({
                     "type": "traversal",
-                    "traversal": {"edges": new_edges},
-                    "traversal_nodes": traversal_nodes,
-                    "collected_entities": [source_id] + [e["target"] for e in new_edges],
+                    "traversal": {"edges": normalized_edges},
+                    "traversal_nodes": normalized_nodes,
+                    "collected_entities": collected_entities,
                 })
 
             lines = [f"Node: {data['label']} (community: {data['community_id']})"]
@@ -1073,12 +1145,13 @@ class PhilosopherAgent:
             for nid in traversal_node_ids:
                 if nid is None:
                     continue
-                node_data = G.nodes.get(nid, {}) if G is not None and nid in G else {}
+                nid_str = str(nid)
+                node_data = G.nodes.get(nid_str, {}) if G is not None and nid_str in G else {}
                 traversal_nodes_meta.append({
-                    "id": nid,
-                    "label": node_data.get("label", nid),
-                    "community": community_map.get(nid),
-                    "degree": G.degree(nid) if G is not None and nid in G else 0,
+                    "id": nid_str,
+                    "label": node_data.get("label", nid_str),
+                    "community": community_map.get(nid_str),
+                    "degree": G.degree(nid_str) if G is not None and nid_str in G else 0,
                 })
 
         # Build response
@@ -1093,6 +1166,11 @@ class PhilosopherAgent:
         self._last_qas.append((question, self._final_answer or ""))
         self._last_qas = self._last_qas[-5:]
 
+        normalized_edges = self._normalize_edge_list(self._traversed_edges)
+        normalized_nodes = self._normalize_node_list(traversal_nodes_meta)
+        normalized_nodes = self._ensure_nodes_for_edges(normalized_nodes, normalized_edges)
+        normalized_entities = self._normalize_entity_list(self._collected_entities)
+
         return {
             "answer": self._final_answer or "No answer was synthesized within the iteration limit.",
             "citations": citations_data,
@@ -1104,13 +1182,13 @@ class PhilosopherAgent:
                 "domains": self._scope.domains if self._scope else [],
             } if self._scope else None,
             "collected_chunks": self._collected_chunks,
-            "collected_entities": self._collected_entities,
+            "collected_entities": normalized_entities,
             "traversal": {
-                "visited_nodes": self._collected_entities,
-                "edges": self._traversed_edges,
-                "edges_traversed": len(self._traversed_edges),
+                "visited_nodes": normalized_entities,
+                "edges": normalized_edges,
+                "edges_traversed": len(normalized_edges),
             },
-            "traversal_nodes": traversal_nodes_meta,
+            "traversal_nodes": normalized_nodes,
             "thoughts": self._thoughts,
             "iterations": iteration,
             "session_continued": session_continued,

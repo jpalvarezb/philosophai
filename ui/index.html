@@ -667,7 +667,7 @@
             color: #fff;
         }
 
-        .citation-ref {
+        #chatbox .citation-ref {
             color: #00ff8a;
             cursor: pointer;
             font-weight: normal;
@@ -678,7 +678,8 @@
             padding: 0;
             font: inherit;
         }
-        .citation-ref:hover {
+        #chatbox .citation-ref:hover {
+            color: #00ff8a;
             text-decoration: underline;
             text-decoration-thickness: 2px;
         }
@@ -2524,14 +2525,32 @@
         }
 
         function setGraphData(data, from) {
-            // Debugging illegal string nodes
-            const badNodes = (data.nodes || []).filter(n => typeof n !== 'object');
+            if (!data) return;
+
+            const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+            const links = Array.isArray(data.links) ? data.links : [];
+            const badNodes = nodes.filter(n => !n || typeof n !== 'object');
             if (badNodes.length > 0) {
-                console.error(`[${from}] BAD DATA: found ${badNodes.length} string nodes!`, badNodes, data);
-                // As a fallback, filter them out to prevent a crash
-                data.nodes = data.nodes.filter(n => typeof n === 'object');
+                console.error(`[${from}] BAD DATA: found ${badNodes.length} non-object nodes. Normalizing graph data to prevent force-graph crashes.`, badNodes, data);
             }
-            Graph.graphData(data);
+
+            const normalized = normalizeGraphData({ nodes, links });
+            graphData = normalized;
+            nodesById = Object.fromEntries(graphData.nodes.map(n => [n.id, n]));
+
+            graphData.nodes.forEach(n => { n.neighbors = []; });
+            graphData.links.forEach(link => {
+                const s = typeof link.source === 'object' ? link.source.id : link.source;
+                const t = typeof link.target === 'object' ? link.target.id : link.target;
+                const src = nodesById[s];
+                const tgt = nodesById[t];
+                if (src && tgt) {
+                    src.neighbors.push(tgt);
+                    tgt.neighbors.push(src);
+                }
+            });
+
+            Graph.graphData(graphData);
         }
 
         function scheduleZoomToFitLoadedGraph({ duration = 700, padding = 80, debounceMs = 180 } = {}) {
