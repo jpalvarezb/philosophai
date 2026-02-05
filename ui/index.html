@@ -2464,18 +2464,32 @@
             }
 
             if (data.traversal && Array.isArray(data.traversal.edges)) {
+                // force-graph may mutate link endpoints from ids -> node objects; normalize for stable de-duping
+                const linkEndpointId = (v) => (v && typeof v === 'object') ? v.id : v;
+
                 data.traversal.edges.forEach(edge => {
-                    const srcId = edge.source;
-                    const tgtId = edge.target;
+                    const srcRaw = edge?.source;
+                    const tgtRaw = edge?.target;
+                    if (srcRaw == null || tgtRaw == null) return;
+
+                    const srcId = String(srcRaw);
+                    const tgtId = String(tgtRaw);
                     if (!srcId || !tgtId) return;
+
                     traversalLinks.add(`${srcId}-${tgtId}`);
                     traversalNodes.add(srcId);
                     traversalNodes.add(tgtId);
 
-                    const exists = graphData.links.some(l =>
-                        (l.source === srcId && l.target === tgtId) ||
-                        (l.source === tgtId && l.target === srcId)
-                    );
+                    const exists = graphData.links.some(l => {
+                        if (!l || typeof l !== 'object') return false;
+                        const s = linkEndpointId(l.source);
+                        const t = linkEndpointId(l.target);
+                        if (s == null || t == null) return false;
+                        const sid = String(s);
+                        const tid = String(t);
+                        return (sid === srcId && tid === tgtId) || (sid === tgtId && tid === srcId);
+                    });
+
                     if (!exists) {
                         graphData.links.push({ source: srcId, target: tgtId, label: edge.label || edge.type || '', _dynamic: true, isBase: false });
                     }
@@ -2533,9 +2547,84 @@
             if (badNodes.length > 0) {
                 console.error(`[${from}] BAD DATA: found ${badNodes.length} non-object nodes. Normalizing graph data to prevent force-graph crashes.`, badNodes, data);
             }
-
             const normalized = normalizeGraphData({ nodes, links });
-            graphData = normalized;
+
+            // Final safety: coerce any lingering primitives into node objects and copy arrays to avoid mutating force-graph internals
+            const safeNodes = [];
+            const seenNodeIds = new Set();
+            for (const n of normalized.nodes) {
+                if (n && typeof n === 'object' && n.id != null) {
+                    const id = String(n.id);
+                    if (!id) continue;
+                    if (seenNodeIds.has(id)) continue;
+                    // Ensure stable id/label in case upstream produced non-string ids
+                    n.id = id;
+                    if (!n.label) n.label = id;
+                    safeNodes.push(n);
+                    seenNodeIds.add(id);
+                } else if (n != null) {
+                    const id = String(n);
+                    if (id && !seenNodeIds.has(id)) {
+                        safeNodes.push({ id, label: id, val: 1, neighbors: [], _dynamic: true, isBase: false });
+                        seenNodeIds.add(id);
+                    }
+                }
+            }
+
+            const safeLinks = [];
+            for (const l of normalized.links || []) {
+                if (!l || typeof l !== 'object') continue;
+                const s = typeof l.source === 'object' ? l.source?.id : l.source;
+                const t = typeof l.target === 'object' ? l.target?.id : l.target;
+                if (s == null || t == null) continue;
+                const sid = String(s);
+                const tid = String(t);
+                if (!sid || !tid) continue;
+                if (!seenNodeIds.has(sid)) {
+                    safeNodes.push({ id: sid, label: sid, val: 1, neighbors: [], _dynamic: true, isBase: false });
+                    seenNodeIds.add(sid);
+                }
+                if (!seenNodeIds.has(tid)) {
+                    safeNodes.push({ id: tid, label: tid, val: 1, neighbors: [], _dynamic: true, isBase: false });
+                    seenNodeIds.add(tid);
+                }
+                safeLinks.push({ ...l, source: sid, target: tid });
+            }
+
+            // Tripwire: never pass primitives/missing ids to force-graph (d3-force will assign vx/vy)
+            const invalidNodes = safeNodes.filter(n => !n || typeof n !== 'object' || n.id == null || !String(n.id));
+            if (invalidNodes.length) {
+                console.error(`[${from}] REFUSING Graph.graphData(): ${invalidNodes.length} invalid node(s) after normalization.`, invalidNodes.slice(0, 10));
+                return;
+            }
+
+            const invalidLinks = safeLinks.filter(l => !l || typeof l !== 'object' || l.source == null || l.target == null || !String(l.source) || !String(l.target));
+            if (invalidLinks.length) {
+                console.error(`[${from}] REFUSING Graph.graphData(): ${invalidLinks.length} invalid link(s) after normalization.`, invalidLinks.slice(0, 10));
+                return;
+            }
+
+            // Hydrate link endpoints to node objects (force-graph/d3-force mutates endpoints anyway; this avoids any chance of string nodes leaking)
+            const nodeById = new Map();
+            safeNodes.forEach(n => { if (n && typeof n === 'object' && n.id != null) nodeById.set(String(n.id), n); });
+
+            const hydratedLinks = [];
+            const hydrationFailures = [];
+            for (const l of safeLinks) {
+                const src = nodeById.get(String(l.source));
+                const tgt = nodeById.get(String(l.target));
+                if (!src || !tgt) {
+                    hydrationFailures.push(l);
+                    continue;
+                }
+                hydratedLinks.push({ ...l, source: src, target: tgt });
+            }
+            if (hydrationFailures.length) {
+                console.error(`[${from}] REFUSING Graph.graphData(): ${hydrationFailures.length} link(s) refer to missing nodes after hydration.`, hydrationFailures.slice(0, 10));
+                return;
+            }
+
+            graphData = { nodes: safeNodes, links: hydratedLinks };
             nodesById = Object.fromEntries(graphData.nodes.map(n => [n.id, n]));
 
             graphData.nodes.forEach(n => { n.neighbors = []; });
@@ -2550,7 +2639,11 @@
                 }
             });
 
-            Graph.graphData(graphData);
+            try {
+                Graph.graphData(graphData);
+            } catch (err) {
+                console.error(`[${from}] Graph.graphData crashed`, err);
+            }
         }
 
         function scheduleZoomToFitLoadedGraph({ duration = 700, padding = 80, debounceMs = 180 } = {}) {
@@ -2652,29 +2745,28 @@
 
             const nodes = [];
             const byId = new Map();
-
-            const addNode = (n) => {
-                if (n && typeof n === 'object') {
-                    const id = n.id != null ? String(n.id) : null;
-                    if (!id) return;
-                    const node = {
+            const sanitizeNode = (n) => {
+                if (n == null) return null;
+                // Already an object with id
+                if (typeof n === 'object') {
+                    const id = n.id != null ? String(n.id) : (n.id === 0 ? '0' : null);
+                    const safeId = id ?? (n && n !== Object(n) ? String(n) : null);
+                    if (!safeId) return null;
+                    return {
                         neighbors: [],
-                        val: n.val ?? Math.max(2, 2 + Math.sqrt(n.degree || 0)),
+                        val: Number.isFinite(n.val) ? n.val : Math.max(2, 2 + Math.sqrt(n.degree || 0)),
                         isBase: assumeBase ? true : !!n.isBase,
                         _dynamic: n._dynamic ?? !assumeBase,
                         ...n,
-                        id,
-                        label: n.label || id,
+                        id: safeId,
+                        label: n.label || safeId,
                     };
-                    byId.set(id, node);
-                    nodes.push(node);
-                    return;
                 }
 
-                const id = n != null ? String(n) : null;
-                if (!id) return;
-                if (byId.has(id)) return;
-                const node = {
+                // Primitive -> coerce to node object
+                const id = String(n);
+                if (!id) return null;
+                return {
                     id,
                     label: id,
                     val: 1,
@@ -2682,7 +2774,18 @@
                     _dynamic: true,
                     isBase: assumeBase,
                 };
-                byId.set(id, node);
+            };
+
+            const badNodes = [];
+
+            const addNode = (n) => {
+                const node = sanitizeNode(n);
+                if (!node) {
+                    badNodes.push(n);
+                    return;
+                }
+                if (byId.has(node.id)) return;
+                byId.set(node.id, node);
                 nodes.push(node);
             };
 
@@ -2715,6 +2818,9 @@
                 });
             });
 
+            if (badNodes.length) {
+                console.warn(`[normalizeGraphData] Dropped ${badNodes.length} invalid node(s)`, badNodes.slice(0, 10));
+            }
             return { nodes, links };
         }
 
