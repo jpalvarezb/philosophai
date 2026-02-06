@@ -29,24 +29,38 @@ class GraphBuilder:
         G = nx.MultiDiGraph()
 
         for _, row in df.iterrows():
-            subj_id = row["subject_canon_id"]
-            pred_id = row["predicate_canon_id"]
-            obj_id = row["object_canon_id"]
+            subj_raw = row["subject_canon_id"]
+            pred_raw = row["predicate_canon_id"]
+            obj_raw = row["object_canon_id"]
+
+            if subj_raw is None or obj_raw is None or pred_raw is None:
+                continue
+
+            subj_id = str(subj_raw)
+            pred_id = str(pred_raw)
+            obj_id = str(obj_raw)
+
+            if not subj_id or not obj_id or not pred_id:
+                continue
+
+            subj_label = row.get("subject_label") if hasattr(row, "get") else row["subject_label"]
+            obj_label = row.get("object_label") if hasattr(row, "get") else row["object_label"]
+            pred_label = row.get("predicate_label") if hasattr(row, "get") else row["predicate_label"]
 
             # Add nodes with labels
             if subj_id not in G:
-                G.add_node(subj_id, label=row["subject_label"])
+                G.add_node(subj_id, label=str(subj_label) if subj_label else subj_id)
             if obj_id not in G:
-                G.add_node(obj_id, label=row["object_label"])
+                G.add_node(obj_id, label=str(obj_label) if obj_label else obj_id)
 
             # Add edge
             G.add_edge(
                 subj_id,
                 obj_id,
                 key=pred_id,
-                label=row["predicate_label"],
-                weight=row["weight"],
-                chunks=row["chunk_ids"],
+                label=str(pred_label) if pred_label else pred_id,
+                weight=int(row["weight"]) if row.get("weight") is not None else 1,
+                chunks=list(row["chunk_ids"]) if row.get("chunk_ids") is not None else [],
             )
 
         print(f"🎉 Graph built: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
@@ -86,23 +100,29 @@ class GraphBuilder:
             node_labels[row["object_canon_id"]] = row["object_label"]
 
         for _, row in df.iterrows():
-            u_id = row["u_id"]
-            v_id = row["v_id"]
+            u_raw = row["u_id"]
+            v_raw = row["v_id"]
+            if u_raw is None or v_raw is None:
+                continue
+            u_id = str(u_raw)
+            v_id = str(v_raw)
+            if not u_id or not v_id:
+                continue
 
             # Add nodes
             if u_id not in G:
-                G.add_node(u_id, label=node_labels.get(u_id, u_id))
+                G.add_node(u_id, label=str(node_labels.get(u_id, u_id)))
             if v_id not in G:
-                G.add_node(v_id, label=node_labels.get(v_id, v_id))
+                G.add_node(v_id, label=str(node_labels.get(v_id, v_id)))
 
             # Add undirected edge with aggregated weight
             G.add_edge(
                 u_id,
                 v_id,
-                weight=row["weight"],
-                predicate_count=row["predicate_count"],
-                top_predicates=row["top_predicates"],
-                chunks=row["chunk_ids"],
+                weight=int(row["weight"]) if row.get("weight") is not None else 1,
+                predicate_count=int(row["predicate_count"]) if row.get("predicate_count") is not None else 0,
+                top_predicates=list(row["top_predicates"]) if row.get("top_predicates") is not None else [],
+                chunks=list(row["chunk_ids"]) if row.get("chunk_ids") is not None else [],
             )
 
         print(f"🎉 Cluster graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")

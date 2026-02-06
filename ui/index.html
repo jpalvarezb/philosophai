@@ -875,7 +875,12 @@
     // Global error handler to catch d3-force crashes
     window.onerror = function(msg, url, line, col, error) {
         if (typeof msg === 'string' && msg.includes("Cannot create property 'vx' on string")) {
-            console.error("[CRITICAL] d3-force crash detected! Dumping graphData:", window.graphDataDump);
+            console.error("[CRITICAL] d3-force crash detected! Dumping graph data:", {
+                dump: window.graphDataDump,
+                stats: window.graphDataDumpStats,
+                internal: window.graphDataDumpInternal,
+                error,
+            });
             alert("System Error: Graph rendering crashed (vx on string). Check console for details.");
         }
     };
@@ -900,6 +905,45 @@
         let citationAnswerSeq = 0;
         let citationHoverSeq = 0;
         let chatboxRect = null;
+
+        // Invariant watchdog: periodically checks the *internal* force-graph graphData() state.
+        // Goal: catch any primitive nodes (strings) before/when the simulation crashes.
+        const graphInvariant = {
+            timer: null,
+            lastBadKey: null,
+            lastCheckedAt: 0,
+        };
+
+        function checkForceGraphInternalData(from) {
+            if (!Graph || typeof Graph.graphData !== 'function') return;
+
+            let gd = null;
+            try { gd = Graph.graphData(); } catch (_) { return; }
+
+            const nodes = (gd && Array.isArray(gd.nodes)) ? gd.nodes : [];
+            const bad = nodes.filter(n => !n || typeof n !== 'object');
+            if (!bad.length) return;
+
+            const sample = bad.slice(0, 8).map(v => ({ type: typeof v, value: v }));
+            const key = JSON.stringify(sample);
+            if (key === graphInvariant.lastBadKey) return;
+
+            graphInvariant.lastBadKey = key;
+            window.graphDataDumpInternal = gd;
+            console.error(`[WATCHDOG:${from}] force-graph internal nodes contains ${bad.length} primitive(s). Sample:`, sample);
+            console.trace(`[WATCHDOG:${from}] stack trace`);
+        }
+
+        function startGraphInvariantWatchdog() {
+            if (graphInvariant.timer != null) return;
+            graphInvariant.timer = setInterval(() => {
+                // Throttle a bit; on slow machines we don't want this to dominate.
+                const now = performance.now();
+                if (now - graphInvariant.lastCheckedAt < 450) return;
+                graphInvariant.lastCheckedAt = now;
+                checkForceGraphInternalData('interval');
+            }, 500);
+        }
 
         // Auto-fit state: when the graph expands, fit the viewport to all currently loaded nodes.
         let autoFitTimer = null;
@@ -2460,37 +2504,83 @@
 
         function processTraversal(data) {
             if (!data) return;
+
+            // IMPORTANT: do not mutate the arrays currently owned by force-graph while the engine is ticking.
+            // Build a fresh {nodes,links} snapshot, apply deltas, then hand off atomically via setGraphData().
+            const next = {
+                nodes: Array.isArray(graphData?.nodes) ? graphData.nodes.slice() : [],
+                links: Array.isArray(graphData?.links) ? graphData.links.slice() : [],
+            };
+
+            const nextNodesById = new Map();
+            for (const n of next.nodes) {
+                if (!n || typeof n !== 'object') continue;
+                if (n.id == null) continue;
+                const id = String(n.id);
+                if (!id) continue;
+                nextNodesById.set(id, n);
+            }
+
+            const ensureNextNode = (rawId, meta = null) => {
+                if (rawId == null) return null;
+                const id = String(rawId);
+                if (!id) return null;
+
+                const existing = nextNodesById.get(id);
+                if (existing) {
+                    if (meta && typeof meta === 'object') Object.assign(existing, meta);
+                    if (!existing.id) existing.id = id;
+                    if (!existing.label) existing.label = existing.label || id;
+                    return existing;
+                }
+
+                const cached = allKnownNodes.get(id);
+                const base = (cached && typeof cached === 'object') ? cached : null;
+                const node = base
+                    ? { ...base, neighbors: (base.neighbors || []).slice(), val: base.val || 5, _dynamic: true, isBase: false }
+                    : { id, label: id, val: 1, neighbors: [], _dynamic: true, isBase: false };
+
+                if (meta && typeof meta === 'object') Object.assign(node, meta);
+                node.id = id;
+                if (!node.label) node.label = id;
+
+                next.nodes.push(node);
+                nextNodesById.set(id, node);
+                return node;
+            };
+
+            // Upsert traversal node metadata
             if (Array.isArray(data.traversal_nodes)) {
-                data.traversal_nodes.forEach(n => {
-                    if (!n || n.id == null) return;
+                for (const n of data.traversal_nodes) {
+                    if (!n || typeof n !== 'object' || n.id == null) continue;
                     const id = String(n.id);
+                    if (!id) continue;
                     const normalized = { ...n, id, label: n.label || id };
                     const cached = allKnownNodes.get(id) || {};
                     allKnownNodes.set(id, { ...cached, ...normalized });
-                    if (nodesById[id]) {
-                        Object.assign(nodesById[id], normalized);
-                    }
-                });
+                    ensureNextNode(id, normalized);
+                }
             }
 
+            // Edges (de-dupe, ensure endpoints exist)
             if (data.traversal && Array.isArray(data.traversal.edges)) {
                 // force-graph may mutate link endpoints from ids -> node objects; normalize for stable de-duping
                 const linkEndpointId = (v) => (v && typeof v === 'object') ? v.id : v;
 
-                data.traversal.edges.forEach(edge => {
+                for (const edge of data.traversal.edges) {
                     const srcRaw = edge?.source;
                     const tgtRaw = edge?.target;
-                    if (srcRaw == null || tgtRaw == null) return;
+                    if (srcRaw == null || tgtRaw == null) continue;
 
                     const srcId = String(srcRaw);
                     const tgtId = String(tgtRaw);
-                    if (!srcId || !tgtId) return;
+                    if (!srcId || !tgtId) continue;
 
                     traversalLinks.add(`${srcId}-${tgtId}`);
                     traversalNodes.add(srcId);
                     traversalNodes.add(tgtId);
 
-                    const exists = graphData.links.some(l => {
+                    const exists = next.links.some(l => {
                         if (!l || typeof l !== 'object') return false;
                         const s = linkEndpointId(l.source);
                         const t = linkEndpointId(l.target);
@@ -2501,50 +2591,38 @@
                     });
 
                     if (!exists) {
-                        graphData.links.push({ source: srcId, target: tgtId, label: edge.label || edge.type || '', _dynamic: true, isBase: false });
+                        next.links.push({ source: srcId, target: tgtId, label: edge.label || edge.type || '', _dynamic: true, isBase: false });
                     }
 
-                    ensureNode(srcId);
-                    ensureNode(tgtId);
-                });
+                    ensureNextNode(srcId);
+                    ensureNextNode(tgtId);
+                }
             }
 
+            // Entities-only events
             if (Array.isArray(data.collected_entities)) {
-                data.collected_entities.forEach(id => {
-                    ensureNode(id);
-                    traversalNodes.add(id);
-                });
+                for (const rawId of data.collected_entities) {
+                    const node = ensureNextNode(rawId);
+                    if (node) traversalNodes.add(String(node.id));
+                }
             }
 
             // Ensure citation source nodes exist so hover can focus them
             if (Array.isArray(citationData)) {
-                citationData.forEach(c => {
+                for (const c of citationData) {
                     if (c && Array.isArray(c.node_ids)) {
-                        c.node_ids.forEach(id => {
-                            ensureNode(id);
-                            traversalNodes.add(id);
-                        });
+                        for (const rawId of c.node_ids) {
+                            const node = ensureNextNode(rawId);
+                            if (node) traversalNodes.add(String(node.id));
+                        }
                     }
-                });
+                }
             }
 
-            const normalized = normalizeGraphData({ nodes: graphData.nodes, links: graphData.links });
-            graphData = normalized;
-            nodesById = Object.fromEntries(graphData.nodes.map(n => [n.id, n]));
-
-            graphData.nodes.forEach(n => { n.neighbors = []; });
-            graphData.links.forEach(link => {
-                const src = nodesById[link.source];
-                const tgt = nodesById[link.target];
-                if (src && tgt) {
-                    src.neighbors.push(tgt);
-                    tgt.neighbors.push(src);
-                }
-            });
-
-            setGraphData(graphData, 'processTraversal');
+            // Hand off atomically (setGraphData will normalize and rebuild neighbors)
+            setGraphData(next, 'processTraversal');
             if (Graph && typeof Graph.d3ReheatSimulation === 'function') Graph.d3ReheatSimulation();
-            Graph.nodeCanvasObject(Graph.nodeCanvasObject());
+            if (Graph) Graph.nodeCanvasObject(Graph.nodeCanvasObject());
             scheduleZoomToFitLoadedGraph();
         }
 
@@ -2605,12 +2683,14 @@
             const invalidNodes = safeNodes.filter(n => !n || typeof n !== 'object' || n.id == null || !String(n.id));
             if (invalidNodes.length) {
                 console.error(`[${from}] REFUSING Graph.graphData(): ${invalidNodes.length} invalid node(s) after normalization.`, invalidNodes.slice(0, 10));
+                console.trace(`[${from}] invalid node(s) trace`);
                 return;
             }
 
             const invalidLinks = safeLinks.filter(l => !l || typeof l !== 'object' || l.source == null || l.target == null || !String(l.source) || !String(l.target));
             if (invalidLinks.length) {
                 console.error(`[${from}] REFUSING Graph.graphData(): ${invalidLinks.length} invalid link(s) after normalization.`, invalidLinks.slice(0, 10));
+                console.trace(`[${from}] invalid link(s) trace`);
                 return;
             }
 
@@ -2631,6 +2711,7 @@
             }
             if (hydrationFailures.length) {
                 console.error(`[${from}] REFUSING Graph.graphData(): ${hydrationFailures.length} link(s) refer to missing nodes after hydration.`, hydrationFailures.slice(0, 10));
+                console.trace(`[${from}] hydration failure trace`);
                 return;
             }
 
@@ -2651,6 +2732,12 @@
 
             // Expose for debugging
             window.graphDataDump = graphData;
+            window.graphDataDumpStats = {
+                from,
+                nodes: graphData.nodes.length,
+                links: graphData.links.length,
+                nonObjectNodes: graphData.nodes.filter(n => !n || typeof n !== 'object').slice(0, 8),
+            };
 
             try {
                 // Final validation before handing to library
@@ -2658,6 +2745,11 @@
                     throw new Error("graphData.nodes contains primitives!");
                 }
                 Graph.graphData(graphData);
+
+                // Capture what force-graph thinks it has, after it has had a chance to ingest.
+                setTimeout(() => {
+                    try { window.graphDataDumpInternal = Graph.graphData(); } catch (_) {}
+                }, 0);
             } catch (err) {
                 console.error(`[${from}] Graph.graphData crashed`, err);
             }
@@ -2839,16 +2931,6 @@
                 console.warn(`[normalizeGraphData] Dropped ${badNodes.length} invalid node(s)`, badNodes.slice(0, 10));
             }
             return { nodes, links };
-        }
-
-        function ensureNode(id) {
-            if (!id || nodesById[id]) return;
-            const cached = allKnownNodes.get(id);
-            const newNode = cached
-                ? { ...cached, neighbors: (cached.neighbors || []).slice(), val: cached.val || 5, _dynamic: true, isBase: false }
-                : { id, label: id, val: 1, neighbors: [], _dynamic: true, isBase: false };
-            graphData.nodes.push(newNode);
-            nodesById[id] = newNode;
         }
 
         function resetGraphToBase() {
@@ -3312,7 +3394,16 @@
 
             Graph.d3Force('charge').strength(-120);
             Graph.d3Force('link').distance(120);
-            Graph.onEngineTick(() => repelGraphFromChatbox());
+            Graph.onEngineTick(() => {
+                repelGraphFromChatbox();
+                // NOTE: If the simulation crashes mid-tick, this won't run.
+                // That's why we also have an interval-based watchdog.
+                checkForceGraphInternalData('engineTick');
+            });
+
+            // Expose for manual debugging.
+            window.forceGraph = Graph;
+            startGraphInvariantWatchdog();
 
             // Capture the initial viewport/chatbox placement once (used by Reset).
             captureInitialUiStateIfNeeded();

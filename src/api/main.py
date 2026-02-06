@@ -320,20 +320,23 @@ def create_app() -> FastAPI:
 
         for node_id in node_set:
             data = H.nodes.get(node_id, {})
+            node_id_str = str(node_id)
+            label = data.get("label", node_id_str)
             nodes.append({
-                "id": node_id,
-                "label": data.get("label", node_id),
-                "community": state.node_to_community.get(node_id),
-                "degree": deg_map.get(node_id, 0),
+                "id": node_id_str,
+                "label": str(label) if label is not None else node_id_str,
+                "community": state.node_to_community.get(node_id, state.node_to_community.get(node_id_str)),
+                "degree": int(deg_map.get(node_id, 0)),
             })
 
         for u, v, data in H.edges(data=True):
             if u in node_set and v in node_set:
+                label = data.get("label", "")
                 links.append({
-                    "source": u,
-                    "target": v,
-                    "label": data.get("label", ""),
-                    "weight": data.get("weight", 1),
+                    "source": str(u),
+                    "target": str(v),
+                    "label": str(label) if label is not None else "",
+                    "weight": int(data.get("weight", 1) or 1),
                 })
 
         return {"nodes": nodes, "links": links}
