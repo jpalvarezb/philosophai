@@ -867,9 +867,19 @@
     <div id="citation-tooltip"></div>
     <video id="gesture-video" style="display:none" playsinline muted></video>
 
-    <script src="https://cdn.jsdelivr.net/npm/force-graph"></script>
+    <!-- Force reload of force-graph library to avoid stale cached versions -->
+    <script src="https://cdn.jsdelivr.net/npm/force-graph?v=2"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+    <script>
+    // Global error handler to catch d3-force crashes
+    window.onerror = function(msg, url, line, col, error) {
+        if (typeof msg === 'string' && msg.includes("Cannot create property 'vx' on string")) {
+            console.error("[CRITICAL] d3-force crash detected! Dumping graphData:", window.graphDataDump);
+            alert("System Error: Graph rendering crashed (vx on string). Check console for details.");
+        }
+    };
+    </script>
     <script>
     (function() {
         'use strict';
@@ -2639,7 +2649,14 @@
                 }
             });
 
+            // Expose for debugging
+            window.graphDataDump = graphData;
+
             try {
+                // Final validation before handing to library
+                if (graphData.nodes.some(n => typeof n !== 'object')) {
+                    throw new Error("graphData.nodes contains primitives!");
+                }
                 Graph.graphData(graphData);
             } catch (err) {
                 console.error(`[${from}] Graph.graphData crashed`, err);
