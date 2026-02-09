@@ -6,12 +6,83 @@ reasoning steps via the sequential_thinking tool.
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING, Any, Callable
 
 from openai import OpenAI
 
 from .phases import Phase, PHASE_TOOLS
 from ..config.logging import trace_logger, scope_logger
+
+
+def _strip_trailing_citation_inventory(raw: str) -> str:
+    """Strip model-appended trailing citation inventories.
+
+    The backend provides structured citations separately, so if the model appends a trailing
+    block like:
+
+        [1] "Title", [2] "Title", ...
+
+    we remove it for clean UX while preserving traceability.
+
+    Heuristic (intentionally conservative): only strips if the last paragraph starts with a
+    numeric citation token and contains 2+ citations.
+    """
+
+    if raw is None:
+        return ""
+
+    text = str(raw)
+    if not text.strip():
+        return ""
+
+    def split_paras(s: str) -> list[str]:
+        return s.split("\n\n")
+
+    def is_inventory_para(p: str) -> bool:
+        t = (p or "").strip()
+        if not t:
+            return False
+
+        cites = re.findall(r"\[\d+\]", t)
+        if len(cites) < 2:
+            return False
+
+        # Inventory blocks almost always start with a citation token.
+        if not re.match(r"^\s*\[\d+\]", t):
+            return False
+
+        # Be conservative: avoid stripping legitimate prose paragraphs that happen to contain
+        # many citations. Only strip when it looks like a bibliography/mapping list.
+        has_quotes = any(ch in t for ch in ['"', '“', '”'])
+        looks_like_multiline_list = bool(re.search(r"\n\s*\[\d+\]", t))
+
+        lower = t.lower()
+        looks_like_sources_header = lower.startswith(("sources", "references", "citations"))
+
+        return (has_quotes or looks_like_multiline_list or looks_like_sources_header)
+
+    paras = split_paras(text)
+
+    header_only_re = re.compile(r"^(sources|references|citations)\s*:?")
+
+    # Strip trailing inventory-style paragraphs.
+    while paras and is_inventory_para(paras[-1]):
+        paras.pop()
+
+    # If we removed an inventory, we may be left with a dangling header-only paragraph.
+    while paras and header_only_re.fullmatch(paras[-1].strip().lower() or ""):
+        paras.pop()
+
+    # Strip trailing "Sources:" + inventory paragraph.
+    if len(paras) >= 2:
+        prev = paras[-2].strip().lower()
+        last = paras[-1]
+        if header_only_re.fullmatch(prev) and is_inventory_para(last):
+            paras.pop()
+            paras.pop()
+
+    return "\n\n".join(paras).rstrip()
 
 if TYPE_CHECKING:
     from .tools import AgentTools, ToolResult
@@ -255,12 +326,26 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
         "type": "function",
         "function": {
             "name": "synthesize_answer",
-            "description": "Provide the final answer with citations. ONLY available after calling advance_to_synthesis. This ends the query.",
+            "description": (
+                "Provide the final answer with inline citations. ONLY available after calling advance_to_synthesis. "
+                "This ends the query. IMPORTANT: Inline citations only — do NOT add any trailing citation list / bibliography / "
+                "mapping like '[1] \"Title\", [2] \"Title\"' or a 'Sources/References/Citations:' section."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "answer": {"type": "string", "description": "Your answer with inline citations like [1], [2]"},
-                    "cited_chunk_ids": {"type": "array", "items": {"type": "string"}, "description": "Chunk IDs used as evidence, in citation order"},
+                    "answer": {
+                        "type": "string",
+                        "description": (
+                            "Your answer text. Use inline citations like [1], [2] in the relevant sentences. "
+                            "Do NOT add a trailing list mapping citation numbers to titles/quotes."
+                        ),
+                    },
+                    "cited_chunk_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Chunk IDs used as evidence, in citation order",
+                    },
                 },
                 "required": ["answer", "cited_chunk_ids"],
             },
@@ -321,7 +406,9 @@ CITATIONS (AGGRESSIVE)
 - Use [1], [2], ... in answer text; order matches cited_chunk_ids.
 - Cite every substantive factual claim or attribution; when in doubt, cite.
 - It is OK to place multiple citations in one sentence; do not leave uncited factual assertions.
-- Weave citations inside sentences; never add a standalone "Sources" or "References" section.
+- Weave citations inside sentences.
+- NEVER append a trailing citations inventory/bibliography/mapping list (e.g. "[1] \"Title\" , [2] \"Title\"")
+  and NEVER add a standalone "Sources"/"References"/"Citations" section.
 
 OUTPUT
 - Inline citations only; no bullet lists of sources and no trailing source sections.
@@ -966,7 +1053,7 @@ class PhilosopherAgent:
             return "Advanced to synthesis phase. Now call synthesize_answer with your response."
 
         elif name == "synthesize_answer":
-            answer = arguments.get("answer", "")
+            answer = _strip_trailing_citation_inventory(arguments.get("answer", ""))
             cited_chunk_ids = arguments.get("cited_chunk_ids", [])
 
             # Must cite something (inline citations)

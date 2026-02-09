@@ -1211,6 +1211,60 @@
         function sanitizeAnswer(text, citations, { answerId = null } = {}) {
             if (!text) return '';
 
+            const stripTrailingCitationInventory = (raw) => {
+                // Models sometimes append a trailing "inventory" like:
+                // [1] "Title", [2] "Title", ...
+                // We already have structured citations in `citations`, so strip this block for clean UX.
+                const input = String(raw ?? '');
+                if (!input.trim()) return '';
+
+                const splitParas = (s) => String(s).split(/\n\s*\n/);
+
+                let paras = splitParas(input);
+                const isInventoryPara = (p) => {
+                    const t = String(p || '').trim();
+                    if (!t) return false;
+
+                    const lower = t.toLowerCase();
+                    // Header-only paragraphs should be removed if they occur at the end.
+                    // NOTE: Avoid embedded carriage returns in regex literals (can break parsing).
+                    if (/^(sources|references|citations)\s*:?\s*$/i.test(t)) return true;
+
+                    const cites = t.match(/\[\d+\]/g) || [];
+                    if (cites.length < 2) return false; // reduce false positives
+
+                    const startsWithCite = /^\s*\[\d+\]/.test(t);
+                    const hasQuotes = /["“”]/.test(t);
+                    const looksLikeMultilineList = /\n\s*\[\d+\]/.test(t);
+                    if (startsWithCite && (hasQuotes || looksLikeMultilineList)) return true;
+
+                    if (/^(sources|references|citations)\b/.test(lower) && cites.length >= 2) return true;
+
+                    return false;
+                };
+
+                // Strip one or more trailing inventory-style paragraphs.
+                while (paras.length) {
+                    const last = paras[paras.length - 1];
+                    if (!isInventoryPara(last)) break;
+                    paras.pop();
+                }
+
+                // Also handle "Sources:" paragraph followed by an inventory paragraph.
+                if (paras.length >= 2) {
+                    const last = String(paras[paras.length - 1] || '').trim();
+                    const prev = String(paras[paras.length - 2] || '').trim();
+                    const prevLower = prev.toLowerCase();
+                    const hasManyCites = (last.match(/\[\d+\]/g) || []).length >= 2;
+                    if (/^(sources|references|citations)\b/.test(prevLower) && hasManyCites && /^\s*\[\d+\]/.test(last)) {
+                        paras.pop();
+                        paras.pop();
+                    }
+                }
+
+                return paras.join('\n\n').trimEnd();
+            };
+
             // Map chunk_id -> index for cases where the model returns [[chunk_id]] or [chunk_id]
             const chunkIdToIndex = new Map();
             const citationsByIndex = new Map();
@@ -1233,7 +1287,8 @@
                     : `[${n}]`;
             };
 
-            let out = renderMarkdown(text);
+            const cleanedText = stripTrailingCitationInventory(text);
+            let out = renderMarkdown(cleanedText);
 
             // Replace [[chunk_id]] or [chunk_id] with numeric citations if we have a mapping
             out = out.replace(/\[\[([^\]]+)\]\]|\[([^\]]+)\]/g, (match, g1, g2) => {
