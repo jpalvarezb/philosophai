@@ -120,6 +120,25 @@ other tool calls to document your reasoning.""",
     {
         "type": "function",
         "function": {
+            "name": "plan_next_steps",
+            "description": (
+                "Provide a brief plan for the next steps BEFORE traversal. "
+                "State the hop targets and tools you will call next."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan": {"type": "string", "description": "Short plan for upcoming steps"},
+                    "targets": {"type": "array", "items": {"type": "string"}, "description": "Planned nodes/communities to explore"},
+                    "tools": {"type": "array", "items": {"type": "string"}, "description": "Planned tool calls"},
+                },
+                "required": ["plan"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "detect_followup",
             "description": "Decide if the new query is a follow-up to recent QA context. Return IN if follow-up (reuse state), OUT if new topic.",
             "parameters": {
@@ -325,6 +344,35 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
     {
         "type": "function",
         "function": {
+            "name": "advance_to_traversal",
+            "description": "Advance from retrieval to traversal after planning the next steps.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "constitutional_critique",
+            "description": (
+                "Perform a constitutional critique BEFORE synthesis. "
+                "Check the draft approach against the constitutional principles, "
+                "identify missing evidence, weak links, and risks."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "critique": {"type": "string", "description": "Critique of reasoning/evidence vs principles"},
+                    "principles_used": {"type": "array", "items": {"type": "string"}, "description": "Principle IDs referenced"},
+                    "missing_evidence": {"type": "array", "items": {"type": "string"}, "description": "Missing evidence or checks"},
+                    "risks": {"type": "array", "items": {"type": "string"}, "description": "Potential failure modes"},
+                },
+                "required": ["critique"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "synthesize_answer",
             "description": (
                 "Provide the final answer with inline citations. ONLY available after calling advance_to_synthesis. "
@@ -353,16 +401,50 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
     },
 ]
 
+CONSTITUTION = """CONSTITUTIONAL PRINCIPLES (Anthropic-style)
+C1: Be helpful, honest, and harmless.
+C2: Ground claims in cited evidence; avoid fabrication.
+C3: If evidence is insufficient, say so and request more info.
+C4: Separate evidence from interpretation; label uncertainty clearly.
+C5: Avoid sensitive harm: refuse to provide instructions that enable violence, wrongdoing, or self-harm.
+C6: Use a calm, brief refusal style and offer safe alternatives when refusing.
+"""
 
-SYSTEM_PROMPT = """You are **Philo**, a scholarly knowledge agent for philosophy, theology, history, and culture.
+ROLE_PROMPTS = {
+    Phase.RETRIEVAL: (
+        "ROLE: Planner/Researcher. "
+        "Goal: gather evidence and plan multi-hop traversal. "
+        "You must call plan_next_steps before advance_to_traversal."
+    ),
+    Phase.TRAVERSAL: (
+        "ROLE: Pathfinder. "
+        "Goal: expand nodes, read evidence between hops, and build a multi-hop trail."
+    ),
+    Phase.CRITIQUE: (
+        "ROLE: Constitutional Critic. "
+        "Goal: critique the draft approach against the constitutional principles and list gaps/risks."
+    ),
+    Phase.SYNTHESIS: (
+        "ROLE: Synthesizer. "
+        "Goal: write a concise answer grounded in cited evidence only."
+    ),
+}
+
+
+SYSTEM_PROMPT = (
+"""You are **Philo**, a scholarly knowledge agent for philosophy, theology, history, and culture.
 You reason rigorously, cite evidence, and traverse a knowledge graph of concepts, authors, works, and ideas.
 
 SAFETY & ETHICS (CRITICAL)
 - If a user expresses self-harm, suicide, or violence: respond briefly with empathy, urge contacting emergency services or crisis lines; do NOT debate or encourage.
 - For major personal decisions (e.g., divorce, medical/mental health): offer general philosophical/theological perspectives, but avoid directives; suggest consulting qualified professionals.
 - Never encourage harmful, illegal, or self-destructive actions. Keep a neutral, academic tone.
+- If asked for instructions enabling wrongdoing (weapons, hacking, evasion, abuse): refuse briefly and offer safe alternatives.
+- Refusal style: short, calm, non-judgmental. Offer a safe high-level overview or redirect to benign info.
 
 WORKFLOW (phase-gated)
+0) SEQUENTIAL THINKING (MANDATORY EACH ITERATION)
+   - Call sequential_thinking BEFORE any other tool in every iteration.
 0) SESSION
    - If this is a follow-up, continue prior context but go to RETRIEVAL to find new evidence.
    - If new topic, start fresh (GUARD).
@@ -375,11 +457,18 @@ WORKFLOW (phase-gated)
    - Unscoped/global: search_community_reports(query) to find relevant communities -> read_community_summary to check topics -> search_vectors
    - Scoped: go straight to search_vectors(query) (communities are derived from scope)
    - get_entities_from_chunks(chunk_ids, query) to score seeds; get_chunk_content to read evidence
-4) TRAVERSAL (graph exploration)
+4) PLAN (REQUIRED BEFORE TRAVERSAL)
+   - Call plan_next_steps and name the hop targets + tools.
+   - Then call advance_to_traversal.
+5) TRAVERSAL (graph exploration)
    - expand_node on high-scoring seeds
    - If path is weak or node_in_scope is false -> backtrack, use get_traversal_state if lost
+   - Read evidence between hops (get_chunk_content after expand_node)
    - Continue until you have enough evidence, then advance_to_synthesis
-5) SYNTHESIS
+6) CRITIQUE
+   - constitutional_critique before synthesis (identify missing evidence/risks; cite principles)
+   - advance_to_synthesis to enter synthesis after critique
+7) SYNTHESIS
    - synthesize_answer with citations [1], [2], ... matching cited_chunk_ids order
 
 SCORES & HOW TO USE THEM
@@ -421,6 +510,9 @@ STYLE
 - Scholarly, precise, high information density. Present multiple viewpoints when relevant. State uncertainty.
 - Be concise but thorough enough to answer rigorously; avoid fluff.
 """
+    + "\n\n"
+    + CONSTITUTION
+)
 
 
 class PhilosopherAgent:
@@ -461,6 +553,15 @@ class PhilosopherAgent:
         self._read_chunk_ids: set[str] = set()  # All chunks read this session
         self._read_chunk_ids_this_turn: set[str] = set()  # Chunks read in the current turn
         self._session_continued_current_turn: bool = False
+        self._plan_done: bool = False
+        self._plan: dict | None = None
+        self._critique_done: bool = False
+        self._critique: dict | None = None
+        self._requires_evidence_read: bool = False
+        self._last_role_phase: Phase | None = None
+        # Anti-stall: track iterations that do not execute an action tool
+        self._thought_only_streak: int = 0
+        self._forced_tool_choice: str | None = None
         # Traversal state for backtracking
         self._traversal_path: list[str] = []  # Stack of visited node IDs
         self._traversal_history: list[dict] = []  # Full history with context
@@ -561,6 +662,18 @@ class PhilosopherAgent:
         self._read_chunk_ids = set()
         self._read_chunk_ids_this_turn = set()
         self._session_continued_current_turn = False
+        self._plan_done = False
+        self._plan = None
+        self._critique_done = False
+        self._critique = None
+        self._requires_evidence_read = False
+        self._thought_only_streak = 0
+        self._forced_tool_choice = None
+        self._thought_only_streak = 0
+        self._forced_tool_choice = None
+        self._last_role_phase = None
+        self._thought_only_streak = 0
+        self._forced_tool_choice = None
         # Reset traversal state
         self._traversal_path = []
         self._traversal_history = []
@@ -603,6 +716,7 @@ class PhilosopherAgent:
             "guard_relevance": "guard_relevance",
             "skip_guard": "skip_guard",
             "sequential_thinking": "sequential_thinking",
+            "plan_next_steps": "plan_next_steps",
             "list_available_sources": "list_available_sources",
             "set_scope": "set_scope",
             "skip_scope": "skip_scope",
@@ -617,6 +731,7 @@ class PhilosopherAgent:
             "get_traversal_state": "get_traversal_state",
             "advance_to_synthesis": "advance_to_synthesis",
             "synthesize_answer": "synthesize_answer",
+            "constitutional_critique": "constitutional_critique",
         }
         mapped_name = tool_mapping.get(tool_name, tool_name)
         if mapped_name not in allowed:
@@ -633,7 +748,8 @@ class PhilosopherAgent:
             Phase.GUARD: {Phase.SCOPE},
             Phase.SCOPE: {Phase.RETRIEVAL},
             Phase.RETRIEVAL: {Phase.TRAVERSAL, Phase.SYNTHESIS},
-            Phase.TRAVERSAL: {Phase.SYNTHESIS},
+            Phase.TRAVERSAL: {Phase.CRITIQUE},
+            Phase.CRITIQUE: {Phase.SYNTHESIS},
             Phase.SYNTHESIS: {Phase.DONE},
             Phase.DONE: set(),  # Terminal - no transitions allowed
         }
@@ -647,6 +763,39 @@ class PhilosopherAgent:
         trace_logger.info(f"[AGENT] 📍 Phase: {old_phase.value.upper()} → {to_phase.value.upper()}")
         return f"Advanced to {to_phase.value} phase"
 
+    def _role_system_prompt(self, phase: Phase) -> str | None:
+        """Return a role-specific system prompt for the current phase."""
+        return ROLE_PROMPTS.get(phase)
+
+    def _tools_for_phase(self, phase: Phase) -> list[dict]:
+        """Return OpenAI tool schemas allowed for the current phase.
+
+        This prevents the model from selecting tools that will be rejected by phase gating,
+        which is a major source of agent stalls.
+        """
+        allowed = set(PHASE_TOOLS.get(phase, set()))
+        out: list[dict] = []
+        for schema in TOOL_SCHEMAS:
+            fn = schema.get("function") or {}
+            name = fn.get("name")
+            if name in allowed:
+                out.append(schema)
+        return out
+
+    def _recommended_action_tool(self, phase: Phase) -> str | None:
+        """Pick a safe, low-arg action tool to force when the agent stalls."""
+        if phase == Phase.GUARD:
+            return "guard_relevance"
+        if phase == Phase.SCOPE:
+            return "skip_scope"
+        if phase == Phase.RETRIEVAL:
+            return "search_community_reports"
+        if phase == Phase.TRAVERSAL:
+            return "get_traversal_state"
+        if phase == Phase.CRITIQUE:
+            return "constitutional_critique"
+        return None
+
     def _execute_tool(self, name: str, arguments: dict) -> str:
         """Execute a tool and return the result string."""
         # Check phase
@@ -658,6 +807,15 @@ class PhilosopherAgent:
             result = self.agent_tools.sequential_thinking(**arguments)
             self._thoughts.append(result.data)
             return result.message
+
+        elif name == "plan_next_steps":
+            self._plan = {
+                "plan": arguments.get("plan", ""),
+                "targets": arguments.get("targets", []) or [],
+                "tools": arguments.get("tools", []) or [],
+            }
+            self._plan_done = True
+            return "Plan recorded. You may now advance to traversal."
 
         elif name == "detect_followup":
             question = arguments.get("question", "")
@@ -750,6 +908,14 @@ class PhilosopherAgent:
             self._advance_phase(Phase.RETRIEVAL)
             return "Scope skipped. Advanced to retrieval phase with global search."
 
+        elif name == "advance_to_traversal":
+            if self._current_phase != Phase.RETRIEVAL:
+                return "Traversal can only be entered from retrieval phase."
+            if not self._plan_done:
+                return "Plan required—call plan_next_steps before entering traversal."
+            self._advance_phase(Phase.TRAVERSAL)
+            return "Advanced to traversal phase."
+
         elif name == "search_vectors":
             result = self.agent_tools.search_vectors(
                 arguments.get("query", ""),
@@ -818,9 +984,7 @@ class PhilosopherAgent:
                     top3 = [(e["label"], e["query_relevance"], e["reason"]) for e in entities[:3]]
                     trace_logger.info(f"[AGENT]    Top 3: {top3}")
 
-                # Auto-advance to traversal if we have entities
-                if self._current_phase == Phase.RETRIEVAL and entities:
-                    self._advance_phase(Phase.TRAVERSAL)
+                # Do NOT auto-advance: traversal entry is gated by plan_next_steps + advance_to_traversal.
 
                 # Format output with scores
                 lines = [f"Found {len(entities)} entities (scored by query relevance):"]
@@ -837,8 +1001,7 @@ class PhilosopherAgent:
                 self._collected_entities.extend(entity_ids)
                 self._collected_entities = list(dict.fromkeys(self._collected_entities))
                 trace_logger.info(f"[AGENT] 🏷️ Extracted {len(entity_ids)} entities (unscored)")
-                if self._current_phase == Phase.RETRIEVAL and entity_ids:
-                    self._advance_phase(Phase.TRAVERSAL)
+                # Do NOT auto-advance: traversal entry is gated by plan_next_steps + advance_to_traversal.
                 self._emit_event({
                     "type": "entities",
                     "entities": entity_ids,
@@ -856,10 +1019,14 @@ class PhilosopherAgent:
                 if cid:
                     self._read_chunk_ids.add(cid)
                     self._read_chunk_ids_this_turn.add(cid)
+            # Evidence read satisfies the between-hops requirement
+            self._requires_evidence_read = False
             lines = [f"[{c['id']}]\n{c['content']}\n" for c in chunks]
             return "\n---\n".join(lines)
 
         elif name == "expand_node":
+            if self._requires_evidence_read:
+                return "Read evidence first—call get_chunk_content before expanding another node."
             result = self.agent_tools.expand_node(
                 arguments.get("node_id", ""),
                 max_neighbors=arguments.get("max_neighbors", 10),
@@ -902,6 +1069,7 @@ class PhilosopherAgent:
             # Count one hop per successful expansion (not per neighbor listed)
             if added_in_scope > 0:
                 self._new_edges_count += 1
+            self._requires_evidence_read = True
 
             # Build output with scope info
             node_in_scope = data.get("node_in_scope", True)
@@ -1035,6 +1203,12 @@ class PhilosopherAgent:
             return "\n".join(lines)
 
         elif name == "advance_to_synthesis":
+            if self._current_phase == Phase.CRITIQUE:
+                if not self._critique_done:
+                    return "Critique required—call constitutional_critique before synthesis."
+                self._advance_phase(Phase.SYNTHESIS)
+                return "Advanced to synthesis phase. Now call synthesize_answer with your response."
+
             if self._current_phase != Phase.TRAVERSAL:
                 return (
                     "Traversal required—enter traversal phase and call expand_node before synthesis. "
@@ -1049,8 +1223,18 @@ class PhilosopherAgent:
             # Ensure we have read evidence this turn (prevents generic, ungrounded repeats)
             if not self._read_chunk_ids_this_turn:
                 return "No new evidence read yet—call get_chunk_content on the most relevant chunks before synthesis."
-            self._advance_phase(Phase.SYNTHESIS)
-            return "Advanced to synthesis phase. Now call synthesize_answer with your response."
+            self._advance_phase(Phase.CRITIQUE)
+            return "Advanced to critique phase. Call constitutional_critique, then advance_to_synthesis."
+
+        elif name == "constitutional_critique":
+            self._critique = {
+                "critique": arguments.get("critique", ""),
+                "principles_used": arguments.get("principles_used", []) or [],
+                "missing_evidence": arguments.get("missing_evidence", []) or [],
+                "risks": arguments.get("risks", []) or [],
+            }
+            self._critique_done = True
+            return "Critique recorded. Call advance_to_synthesis to proceed."
 
         elif name == "synthesize_answer":
             answer = _strip_trailing_citation_inventory(arguments.get("answer", ""))
@@ -1101,6 +1285,9 @@ class PhilosopherAgent:
         """
         normalized_question = question.strip()
 
+        if self._is_unsafe_query(normalized_question):
+            return self._reject_unsafe(normalized_question)
+
         # Track per-turn activity (do not reset full graph state on follow-ups)
         self._new_edges_count = 0
         self._read_chunk_ids_this_turn = set()
@@ -1110,6 +1297,11 @@ class PhilosopherAgent:
         self._final_answer = ""
         self._citations = []
         self._thoughts = []
+        self._plan_done = False
+        self._plan = None
+        self._critique_done = False
+        self._critique = None
+        self._requires_evidence_read = False
 
         # Decide whether to reuse prior state (follow-up) or start fresh
         recent_qas_str = [f"Q: {q}\nA: {a}" for q, a in self._last_qas[-5:]]
@@ -1165,17 +1357,29 @@ class PhilosopherAgent:
 
             trace_logger.info(f"[AGENT] ─── Iteration {iteration} | Phase: {self._current_phase.value.upper()} ───")
 
+            role_prompt = self._role_system_prompt(self._current_phase)
+            if role_prompt and self._last_role_phase != self._current_phase:
+                messages.append({"role": "system", "content": role_prompt})
+                self._last_role_phase = self._current_phase
+
+            tools_for_phase = self._tools_for_phase(self._current_phase)
+            tool_choice: object = "required"
+            if self._forced_tool_choice:
+                tool_choice = {"type": "function", "function": {"name": self._forced_tool_choice}}
+
             response = self.llm_client.chat.completions.create(
                 model=self.llm_model,
                 messages=messages,
-                tools=TOOL_SCHEMAS,
-                tool_choice="required",
+                tools=tools_for_phase,
+                tool_choice=tool_choice,
             )
 
             assistant_message = response.choices[0].message
             messages.append(assistant_message)
 
             if assistant_message.tool_calls:
+                saw_thought = False
+                executed_action_tool = False
                 for tool_call in assistant_message.tool_calls:
                     func_name = tool_call.function.name
                     func_args = json.loads(tool_call.function.arguments)
@@ -1184,9 +1388,11 @@ class PhilosopherAgent:
                     if func_name == "sequential_thinking":
                         thought = func_args.get('thought', '')[:150]
                         trace_logger.info(f"[AGENT] 💭 Thought #{func_args.get('thought_number', '?')}: {thought}{'...' if len(func_args.get('thought', '')) > 150 else ''}")
+                        saw_thought = True
                     else:
                         args_str = json.dumps(func_args, default=str)[:100]
                         trace_logger.tool_call(func_name, args=args_str)
+                        executed_action_tool = True
 
                     result = self._execute_tool(func_name, func_args)
 
@@ -1206,6 +1412,30 @@ class PhilosopherAgent:
                         trace_logger.info(f"[AGENT] ✅ Synthesis complete")
                         done = True
                         break
+
+                # Anti-stall: if the model only "thinks" and never takes an action tool,
+                # force a safe action tool next iteration.
+                if not done:
+                    if saw_thought and not executed_action_tool:
+                        self._thought_only_streak += 1
+                        rec = self._recommended_action_tool(self._current_phase)
+                        if rec:
+                            self._forced_tool_choice = rec
+                        allowed_actions = sorted(
+                            set(PHASE_TOOLS.get(self._current_phase, set())) - {"sequential_thinking"}
+                        )
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "You are stuck. In your NEXT message you MUST call one action tool. "
+                                f"Allowed action tools in this phase: {allowed_actions}. "
+                                "Do not call sequential_thinking until after you have taken an action."
+                            ),
+                        })
+                    else:
+                        # Any action resets stall forcing
+                        self._thought_only_streak = 0
+                        self._forced_tool_choice = None
             else:
                 # No tool calls - model wants to respond directly
                 trace_logger.info(f"[AGENT] ⚠️ No tool call from model")
@@ -1345,9 +1575,55 @@ class PhilosopherAgent:
             return True
         return False
 
+    def _is_unsafe_query(self, question: str) -> bool:
+        """Heuristic safety filter for disallowed or dangerous instructions."""
+        q = (question or "").lower()
+        unsafe_phrases = [
+            "how to make a bomb",
+            "build a bomb",
+            "make a gun",
+            "build a gun",
+            "weapon instructions",
+            "poison someone",
+            "harm someone",
+            "kill someone",
+            "suicide",
+            "self harm",
+            "self-harm",
+            "overdose",
+            "explosive",
+            "molotov",
+            "credit card fraud",
+            "steal credit card",
+            "hack",
+            "phishing",
+            "malware",
+            "ransomware",
+        ]
+        return any(p in q for p in unsafe_phrases)
+
     def _reject_irrelevant(self, question: str) -> dict:
         """Return a short guardrail response without invoking the LLM."""
         message = "Philo focuses on philosophy, theology, history, and culture. Ask about ideas, thinkers, or texts."
+        return {
+            "answer": message,
+            "citations": [],
+            "phase": Phase.DONE.value,
+            "scope": None,
+            "collected_chunks": [],
+            "collected_entities": [],
+            "traversal": {"visited_nodes": [], "edges": [], "edges_traversed": 0},
+            "traversal_nodes": [],
+            "thoughts": [],
+            "iterations": 0,
+        }
+
+    def _reject_unsafe(self, question: str) -> dict:
+        """Return a brief refusal for unsafe requests."""
+        message = (
+            "I can’t help with that. If you’re looking for general information, "
+            "I can offer high-level, non-actionable context or discuss ethical perspectives."
+        )
         return {
             "answer": message,
             "citations": [],

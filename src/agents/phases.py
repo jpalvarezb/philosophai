@@ -15,6 +15,7 @@ class Phase(str, Enum):
     SCOPE = "scope"
     RETRIEVAL = "retrieval"
     TRAVERSAL = "traversal"
+    CRITIQUE = "critique"
     SYNTHESIS = "synthesis"
     DONE = "done"  # Terminal state after synthesis
 
@@ -43,6 +44,7 @@ PHASE_TOOLS = {
     },
     Phase.RETRIEVAL: {
         "sequential_thinking",
+        "plan_next_steps",
         "search_vectors",
         "search_community_reports",
         "read_community_summary",
@@ -57,6 +59,11 @@ PHASE_TOOLS = {
         "backtrack",
         "get_traversal_state",
         "get_chunk_content",
+        "advance_to_synthesis",
+    },
+    Phase.CRITIQUE: {
+        "sequential_thinking",
+        "constitutional_critique",
         "advance_to_synthesis",
     },
     Phase.SYNTHESIS: {

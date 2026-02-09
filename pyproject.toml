@@ -2,6 +2,7 @@
 name = "philosiphai"
 version = "0.2.0"
 description = "Knowledge Graph RAG with Community Routing"
+license = { text = "Proprietary" }
 requires-python = ">=3.11"
 dependencies = [
     "duckdb>=1.0.0",
