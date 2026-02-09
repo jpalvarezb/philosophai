@@ -345,10 +345,10 @@
         /* --- Chatbox UX upgrades (wrapping input, buttons, resizing, scaling) --- */
         #chatbox {
             /* Default resizable size; JS can override width/height inline */
-            width: min(460px, 90vw);
-            height: min(520px, 82vh);
-            min-width: 280px;
-            min-height: 150px;
+            width: min(340px, 85vw);
+            height: min(380px, 70vh);
+            min-width: 260px;
+            min-height: 120px;
             max-width: 92vw;
             max-height: 92vh;
 
@@ -358,6 +358,11 @@
 
             /* Space to keep chat content clear of bottom overlay controls (gesture/reset + resize handle). */
             --chat-bottom-safe: 72px;
+        }
+
+        #chatbox.collapsed {
+            min-height: 0 !important;
+            height: auto !important;
         }
 
         #chatbox.collapsed #chat-log,
@@ -508,7 +513,7 @@
             transform: none !important;
         }
 
-        /* Send button: pixel paper-plane icon (white only, no box) */
+        /* Send button: pixelarticons arrow-right (24x24 grid, crisp at multiples of 24) */
         #send-btn {
             width: 28px;
             height: 28px;
@@ -524,8 +529,8 @@
             flex-shrink: 0;
         }
         #send-btn svg {
-            width: 22px;
-            height: 22px;
+            width: 24px;
+            height: 24px;
             shape-rendering: crispEdges;
             image-rendering: pixelated;
         }
@@ -778,26 +783,9 @@
                 </div>
                 <div id="prompt-actions">
                     <button id="send-btn" class="icon-btn" title="Send" aria-label="Send message">
-                        <!-- Pixel paper-plane (white only) -->
-                        <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" aria-hidden="true" focusable="false">
-                            <g fill="currentColor">
-                                <!-- top edge -->
-                                <rect x="4" y="3" width="8" height="1"/>
-                                <rect x="5" y="4" width="7" height="1"/>
-                                <rect x="6" y="5" width="6" height="1"/>
-                                <rect x="7" y="6" width="5" height="1"/>
-                                <!-- inner body -->
-                                <rect x="6" y="7" width="5" height="1"/>
-                                <rect x="5" y="8" width="5" height="1"/>
-                                <rect x="4" y="9" width="5" height="1"/>
-                                <!-- lower fin / tail -->
-                                <rect x="3" y="10" width="4" height="1"/>
-                                <rect x="4" y="11" width="2" height="1"/>
-                                <rect x="5" y="12" width="1" height="1"/>
-                                <!-- nose accent -->
-                                <rect x="12" y="4" width="1" height="1"/>
-                                <rect x="12" y="5" width="1" height="1"/>
-                            </g>
+                        <!-- Pixel arrow-right from pixelarticons (MIT, github.com/halfmage/pixelarticons) -->
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" aria-hidden="true" focusable="false">
+                            <path d="M4 11v2h12v2h2v-2h2v-2h-2V9h-2v2H4zm10-4h2v2h-2V7zm0 0h-2V5h2v2zm0 10h2v-2h-2v2zm0 0h-2v2h2v-2z" fill="currentColor"/>
                         </svg>
                     </button>
                 </div>
@@ -1010,6 +998,11 @@
             startZoomLevel: 1,
             startCenter: { x: 0, y: 0 },
             smoothFactor: 0.15, // Lower = smoother but more laggy
+            lastSepValue: null, // previous separation for velocity tracking
+            lastSepTs: 0,       // timestamp of last separation measurement
+            lastAngle: null,    // previous frame's angle between two hands (radians) for rotation
+            smoothAngle: null,  // EMA-smoothed angle for jitter-free rotation
+            lastTwoHandCenter: null, // center point of two hands for panning
         };
 
         // Smooth Pointer History (Moving Average)
@@ -1025,6 +1018,12 @@
             zoom: { current: 1, target: 1 },
             center: { x: 0, y: 0, targetX: 0, targetY: 0 },
             lastSep: null, // Normalized separation
+            panVelocity: { vx: 0, vy: 0 },   // graph-coord units per second (pan momentum)
+            panActive: false,                  // true when hand is actively panning this frame
+            panFriction: 0.92,                 // decay factor per physics frame
+            zoomVelocity: 0,                   // zoom-per-second rate (zoom momentum)
+            zoomActive: false,                 // true when hands are actively zooming this frame
+            zoomFriction: 0.90,                // decay factor per physics frame
         };
 
         // Gesture selection state (pinch-to-select cooldown)
@@ -1032,6 +1031,12 @@
             hoverId: null,
             hoverSince: 0,
             lastSelectTs: 0,
+            pinchFrameCount: 0,     // consecutive frames pinch held (confirmation)
+            dualPinchLastTs: 0,     // cooldown for two-hand dual pinch
+            dragNodeId: null,       // ID of node currently being pinch-dragged
+            dragStartX: null,       // screen X at pinch start (for drag-vs-select threshold)
+            dragStartY: null,       // screen Y at pinch start
+            lastPinchUpTs: 0,       // timestamp of last pinchUp (for double-pinch detection)
         };
 
         const chatbox = document.getElementById('chatbox');
@@ -1702,6 +1707,61 @@
             if (Graph) Graph.nodeCanvasObject(Graph.nodeCanvasObject());
         }
 
+        function findShortestPath(startId, endId) {
+            // BFS on graphData.links to find shortest path between two nodes.
+            // Returns array of node IDs from start to end (inclusive), or [] if no path.
+            if (!startId || !endId) return [];
+            const sId = String(startId);
+            const eId = String(endId);
+            if (sId === eId) return [sId];
+
+            // Build adjacency list from current graph links.
+            const adj = new Map();
+            const links = (graphData && Array.isArray(graphData.links)) ? graphData.links : [];
+            for (const link of links) {
+                if (!link) continue;
+                const s = String(typeof link.source === 'object' ? link.source.id : link.source);
+                const t = String(typeof link.target === 'object' ? link.target.id : link.target);
+                if (!adj.has(s)) adj.set(s, []);
+                if (!adj.has(t)) adj.set(t, []);
+                adj.get(s).push(t);
+                adj.get(t).push(s);
+            }
+
+            if (!adj.has(sId) || !adj.has(eId)) return [];
+
+            // BFS
+            const visited = new Set([sId]);
+            const parent = new Map();
+            const queue = [sId];
+            let found = false;
+
+            while (queue.length > 0) {
+                const current = queue.shift();
+                if (current === eId) { found = true; break; }
+                const neighbors = adj.get(current) || [];
+                for (const n of neighbors) {
+                    if (!visited.has(n)) {
+                        visited.add(n);
+                        parent.set(n, current);
+                        queue.push(n);
+                    }
+                }
+            }
+
+            if (!found) return [];
+
+            // Reconstruct path
+            const path = [];
+            let node = eId;
+            while (node != null) {
+                path.push(node);
+                node = parent.get(node) ?? null;
+                if (node === sId) { path.push(sId); break; }
+            }
+            return path.reverse();
+        }
+
         function updateGestureHover(screenX, screenY) {
             const node = findNearestNode(screenX, screenY);
             gestureHoverNodeId = node ? node.id : null;
@@ -1748,10 +1808,22 @@
             twoHandCandidateSince = 0;
             twoHandLostSince = 0;
             gestureState.lastSep = null;
+            gestureState.panVelocity.vx = 0;
+            gestureState.panVelocity.vy = 0;
+            gestureState.panActive = false;
+            gestureState.zoomVelocity = 0;
+            gestureState.zoomActive = false;
             gestureSelect.hoverId = null;
             gestureSelect.hoverSince = 0;
             gestureSelect.lastSelectTs = 0;
+            gestureSelect.pinchFrameCount = 0;
+            gestureSelect.dualPinchLastTs = 0;
+            gestureSelect.dragNodeId = null;
+            gestureSelect.dragStartX = null;
+            gestureSelect.dragStartY = null;
             zoomState.active = false;
+            zoomState.lastAngle = null;
+            zoomState.smoothAngle = null;
             pointerHistory.length = 0;
             lastVideoTime = -1;
             lastPointerTs = 0;
@@ -1849,18 +1921,57 @@
                     return;
                 }
 
+                // --- Pan momentum / inertia ---
+                // Skip pan updates entirely during two-hand mode
+                if (!gestureTwoHandMode) {
+                    if (!gestureState.panActive) {
+                        const pv = gestureState.panVelocity;
+                        const speed = Math.hypot(pv.vx, pv.vy);
+                        if (speed > 0.5) {
+                            const frameDt = 1 / 60;
+                            gestureState.center.targetX += pv.vx * frameDt;
+                            gestureState.center.targetY += pv.vy * frameDt;
+                            pv.vx *= gestureState.panFriction;
+                            pv.vy *= gestureState.panFriction;
+                        } else {
+                            pv.vx = 0;
+                            pv.vy = 0;
+                        }
+                    }
+                } else {
+                    // Two-hand mode: kill velocity and freeze position
+                    gestureState.panVelocity.vx = 0;
+                    gestureState.panVelocity.vy = 0;
+                    gestureState.center.targetX = gestureState.center.x;
+                    gestureState.center.targetY = gestureState.center.y;
+                }
+                gestureState.panActive = false;
+
+                // --- Zoom momentum / inertia ---
+                if (!gestureState.zoomActive) {
+                    const zv = gestureState.zoomVelocity;
+                    if (Math.abs(zv) > 0.005) {
+                        const frameDt = 1 / 60;
+                        gestureState.zoom.target += zv * frameDt;
+                        gestureState.zoomVelocity *= gestureState.zoomFriction;
+                    } else {
+                        gestureState.zoomVelocity = 0;
+                    }
+                }
+                gestureState.zoomActive = false;
+
                 // Clamp targets
                 gestureState.zoom.target = clamp(gestureState.zoom.target, 0.35, 10);
 
                 // Smooth towards targets
-                const zoomAlpha = 0.14;
+                const zoomAlpha = 0.28;
                 const panAlpha = 0.18;
 
                 gestureState.zoom.current = lerp(gestureState.zoom.current, gestureState.zoom.target, zoomAlpha);
                 gestureState.center.x = lerp(gestureState.center.x, gestureState.center.targetX, panAlpha);
                 gestureState.center.y = lerp(gestureState.center.y, gestureState.center.targetY, panAlpha);
 
-                // Apply immediately (we already interpolate in this loop)
+                // Apply to graph
                 Graph.zoom(gestureState.zoom.current, 0);
                 Graph.centerAt(gestureState.center.x, gestureState.center.y, 0);
 
@@ -1877,7 +1988,7 @@
             gesturePhysicsRaf = null;
         }
 
-        function handlePan(dxScreen, dyScreen) {
+        function handlePan(dxScreen, dyScreen, dtSec) {
             if (!Graph) return;
             const midX = window.innerWidth / 2;
             const midY = window.innerHeight / 2;
@@ -1890,36 +2001,83 @@
 
             gestureState.center.targetX += dx;
             gestureState.center.targetY += dy;
+
+            // Store velocity for momentum / inertia
+            if (dtSec > 0) {
+                const alpha = 0.4; // smooth velocity updates
+                gestureState.panVelocity.vx = lerp(gestureState.panVelocity.vx, dx / dtSec, alpha);
+                gestureState.panVelocity.vy = lerp(gestureState.panVelocity.vy, dy / dtSec, alpha);
+            }
+            gestureState.panActive = true;
         }
 
-        function handleZoom(twoHands) {
-            if (!Graph || twoHands.length < 2) return;
-            // Two-hand zoom lock: use initial separation as baseline for this zoom session.
-            const h1 = twoHands[0].landmarks;
-            const h2 = twoHands[1].landmarks;
-            const c1 = h1?.[0];
-            const c2 = h2?.[0];
-            if (!c1 || !c2) return;
+        // Effect-only helpers: baseline tracking is done in the discriminator block
+        // so both zoom and rotation baselines stay fresh every frame.
 
-            const currentSep = Math.hypot(c1.x - c2.x, c1.y - c2.y);
-            const currentCenter = { x: (c1.x + c2.x) / 2, y: (c1.y + c2.y) / 2 };
+        function applyZoomEffect(currentSep, prevSep, nowTs, prevSepTs) {
+            if (!Graph) return;
+            if (prevSep == null || prevSep <= 0.01) return;
 
-            if (!zoomState.active) {
-                zoomState.active = true;
-                zoomState.startSeparation = currentSep;
-                zoomState.startZoomLevel = Graph.zoom();
-                zoomState.startCenter = currentCenter;
-                return;
+            // Frame-to-frame ratio: >1 = hands apart (zoom in), <1 = hands together (zoom out).
+            let ratio = currentSep / prevSep;
+            if (!Number.isFinite(ratio) || ratio <= 0) return;
+
+            // Asymmetric boost: zoom-out is naturally less responsive because
+            // the ratio is bounded to (0,1). Apply a 1.5x boost for zoom-out.
+            if (ratio < 1) {
+                ratio = 1 - (1 - ratio) * 1.5;
             }
 
-            if (zoomState.startSeparation <= 0.01) return;
-            let ratio = currentSep / zoomState.startSeparation;
-            if (!Number.isFinite(ratio) || ratio <= 0) return;
-            if (ratio > 1) ratio = Math.pow(ratio, 0.85);
+            // Apply sensitivity factor - higher = more responsive zoom.
+            const ZOOM_SENSITIVITY = 1.5; // >1.0 = amplified zoom response
+            ratio = 1 + (ratio - 1) * ZOOM_SENSITIVITY;
 
-            const targetZoom = clamp(zoomState.startZoomLevel * ratio, 0.35, 10);
-            gestureState.zoom.target = targetZoom;
-            gestureState.zoom.current = lerp(gestureState.zoom.current, targetZoom, zoomState.smoothFactor);
+            // Apply incrementally to the current zoom target.
+            const newZoom = clamp(gestureState.zoom.target * ratio, 0.35, 10);
+            gestureState.zoom.target = newZoom;
+
+            // Track separation velocity for zoom momentum.
+            const dt = (nowTs - prevSepTs) / 1000;
+            if (dt > 0.005 && dt < 0.25) {
+                const dSep = currentSep - prevSep;
+                const sepVelocity = dSep / dt;
+                const currentZoom = gestureState.zoom.current || 1;
+                const zoomVel = sepVelocity * currentZoom * 2.0;
+                gestureState.zoomVelocity = lerp(gestureState.zoomVelocity, zoomVel, 0.3);
+            }
+
+            gestureState.zoomActive = true;
+        }
+
+        function applyRotationEffect(dAngle) {
+            if (!Graph) return;
+            if (!graphData || !Array.isArray(graphData.nodes) || graphData.nodes.length === 0) return;
+
+            // Compute graph center (current viewport center).
+            const cx = gestureState.center.x;
+            const cy = gestureState.center.y;
+            const cosA = Math.cos(dAngle);
+            const sinA = Math.sin(dAngle);
+
+            // Rotate every node's position around the graph center.
+            const nodes = (graphData && Array.isArray(graphData.nodes)) ? graphData.nodes : [];
+            for (const node of nodes) {
+                if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) continue;
+                const dx = node.x - cx;
+                const dy = node.y - cy;
+                node.x = cx + dx * cosA - dy * sinA;
+                node.y = cy + dx * sinA + dy * cosA;
+                // Also rotate pinned positions if they exist.
+                if (Number.isFinite(node.fx) && Number.isFinite(node.fy)) {
+                    const dfx = node.fx - cx;
+                    const dfy = node.fy - cy;
+                    node.fx = cx + dfx * cosA - dfy * sinA;
+                    node.fy = cy + dfx * sinA + dfy * cosA;
+                }
+            }
+
+            // Refresh rendering.
+            if (Graph) Graph.nodeCanvasObject(Graph.nodeCanvasObject());
         }
 
         function onGestureResults(results) {
@@ -1931,6 +2089,8 @@
                 gestureLastTwoHandTs = 0;
                 gestureState.lastSep = null;
                 zoomState.active = false;
+                zoomState.lastAngle = null;
+                zoomState.smoothAngle = null;
                 pointerHistory.length = 0;
                 lastPointerTs = 0;
                 lastPointerX = null;
@@ -1958,6 +2118,8 @@
                 gestureLastTwoHandTs = 0;
                 gestureState.lastSep = null;
                 zoomState.active = false;
+                zoomState.lastAngle = null;
+                zoomState.smoothAngle = null;
                 pointerHistory.length = 0;
                 lastPointerTs = 0;
                 lastPointerX = null;
@@ -2043,10 +2205,27 @@
                 gestureTwoHandMode = true;
                 gestureState.lastSep = null; // reset zoom baseline
                 zoomState.active = false;
+                zoomState.lastSepValue = null; // reset so first frame re-initializes
+                zoomState.lastAngle = null;
+                zoomState.smoothAngle = null;
+                zoomState.lastTwoHandCenter = null;
                 pointerHistory.length = 0;
                 lastPointerTs = 0;
                 lastPointerX = null;
                 lastPointerY = null;
+
+                // Kill pan and zoom momentum on two-hand entry so it doesn't drift.
+                gestureState.panVelocity.vx = 0;
+                gestureState.panVelocity.vy = 0;
+                gestureState.zoomVelocity = 0;
+
+                // Release any in-progress node drag (leave pinned at current position).
+                if (gestureSelect.dragNodeId) {
+                    if (Graph && typeof Graph.d3ReheatSimulation === 'function') Graph.d3ReheatSimulation();
+                    gestureSelect.dragNodeId = null;
+                    gestureSelect.dragStartX = null;
+                    gestureSelect.dragStartY = null;
+                }
 
                 // Freeze pan/center ONCE on entry so zoom is strictly zoom-only.
                 if (Graph && typeof Graph.screen2GraphCoords === 'function') {
@@ -2059,24 +2238,117 @@
                     }
                 }
 
+                // Clear transient hover but preserve active selection (gestureActiveNodeId
+                // and gestureActiveNeighborhood stay intact through two-hand mode).
                 gestureHoverNodeId = null;
                 refreshGestureHighlights();
             } else if (!shouldBeTwoHand && gestureTwoHandMode) {
                 gestureTwoHandMode = false;
                 gestureState.lastSep = null; // reset for next two-hand session
                 zoomState.active = false;
+                zoomState.lastSepValue = null;
+                zoomState.lastAngle = null;
+                zoomState.smoothAngle = null;
+                zoomState.lastTwoHandCenter = null;
+                gestureState.zoomVelocity = 0; // kill zoom momentum to prevent drift
 
                 // Avoid huge palm-velocity deltas when returning to one-hand mode
                 mem.lastPalmX = null;
                 mem.lastPalmY = null;
                 mem.lastTs = null;
+
+                // Preserve selection: reset clearArmed and pinch state so transitioning
+                // back to one-hand mode doesn't accidentally clear the active neighborhood.
+                // Only an explicit single-hand unpinch should de-highlight.
+                mem.clearArmed = false;
+                mem.clearArmedSince = 0;
+                mem.lastPinch = false;
+                gestureSelect.pinchFrameCount = 0;
             }
 
-            // If two hands are visible, treat the mode as zoom-only.
-            // Don't depend on gesture classification here — when two hands are detected,
-            // always treat it as two-hand zoom mode for reliability.
+            // If two hands are visible, treat the mode as zoom + optional dual-pinch select.
+            // When two hands are detected, always treat it as two-hand zoom mode for reliability.
             if (gestureTwoHandMode) {
-                if (twoHands) handleZoom(twoHands);
+                if (twoHands) {
+                    // Unified baseline tracking: ALWAYS update both separation and angle
+                    // baselines every frame, then discriminate which effect to apply.
+                    // This prevents stale baselines when switching between zoom and rotation.
+                    const _h1 = twoHands[0].landmarks?.[0];
+                    const _h2 = twoHands[1].landmarks?.[0];
+                    if (_h1 && _h2) {
+                        const _sep = Math.hypot(_h1.x - _h2.x, _h1.y - _h2.y);
+                        const _angle = Math.atan2(_h2.y - _h1.y, _h2.x - _h1.x);
+                        const nowTs = performance.now();
+
+                        // Save previous baselines before updating.
+                        const prevSep = zoomState.lastSepValue;
+                        const prevSepTs = zoomState.lastSepTs;
+                        const prevAngle = zoomState.smoothAngle != null ? zoomState.smoothAngle : zoomState.lastAngle;
+
+                        // Always update separation baseline every frame.
+                        zoomState.lastSepValue = _sep;
+                        zoomState.lastSepTs = nowTs;
+
+                        // Calculate raw angle change (no smoothing for more direct response)
+                        let dAngle = 0;
+                        if (zoomState.lastAngle === null) {
+                            zoomState.lastAngle = _angle;
+                        } else {
+                            dAngle = _angle - zoomState.lastAngle;
+                            // Wrap angle delta to [-PI, PI]
+                            if (dAngle > Math.PI) dAngle -= 2 * Math.PI;
+                            if (dAngle < -Math.PI) dAngle += 2 * Math.PI;
+                            zoomState.lastAngle = _angle;
+                        }
+
+                        // Apply effects based on simple thresholds.
+                        // Both zoom and rotation can fire simultaneously for natural interaction.
+                        if (prevSep != null && prevSep > 0.01) {
+                            const sepChange = Math.abs(_sep - prevSep) / prevSep;
+                            
+                            // Zoom: any separation change > 0.2% triggers zoom
+                            if (sepChange > 0.002) {
+                                applyZoomEffect(_sep, prevSep, nowTs, prevSepTs);
+                            }
+                        }
+                        
+                        // Rotation: use raw angle change for direct response
+                        // Threshold ~0.5 degrees, ignore glitches > 15 degrees
+                        if (Math.abs(dAngle) > 0.008 && Math.abs(dAngle) < 0.25) {
+                            applyRotationEffect(dAngle);
+                        }
+                    }
+
+                    // Dual-pinch detection: if both hands are pinching, find nearest node
+                    // to each hand's index finger and highlight the shortest path between them.
+                    const DUAL_PINCH_COOLDOWN_MS = 1200;
+                    const canDualPinch = (now - (gestureSelect.dualPinchLastTs || 0)) > DUAL_PINCH_COOLDOWN_MS;
+                    if (canDualPinch && twoHands.length >= 2) {
+                        const p1 = isPinched(twoHands[0].landmarks, { threshold: 0.45 });
+                        const p2 = isPinched(twoHands[1].landmarks, { threshold: 0.45 });
+                        if (p1.pinched && p2.pinched) {
+                            // Find nearest node to each hand's index fingertip.
+                            const tip1 = twoHands[0].landmarks?.[8];
+                            const tip2 = twoHands[1].landmarks?.[8];
+                            if (tip1 && tip2) {
+                                const screen1 = landmarkToScreen(tip1);
+                                const screen2 = landmarkToScreen(tip2);
+                                const node1 = findNearestNode(screen1.x, screen1.y);
+                                const node2 = findNearestNode(screen2.x, screen2.y);
+                                if (node1 && node2 && node1.id !== node2.id) {
+                                    const path = findShortestPath(node1.id, node2.id);
+                                    if (path.length > 0) {
+                                        gestureSelect.dualPinchLastTs = now;
+                                        gestureActiveNeighborhood.clear();
+                                        for (const nid of path) gestureActiveNeighborhood.add(nid);
+                                        gestureActiveNodeId = null; // dual-pinch path, no single active node
+                                        refreshGestureHighlights();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 mem.lastGesture = control.gesture;
                 return;
@@ -2121,7 +2393,9 @@
             // - PINCH => select hovered node (highlights 1-hop neighbors locally)
 
             // Wave/pan based on open palm motion (require fully open hand to avoid drift while pointing)
-            if (control.palm) {
+            // Suppress panning when two hands are detected (even during the entry dwell)
+            // to prevent accidental pans while transitioning into two-hand mode.
+            if (control.palm && !isTwoHand) {
                 const palmX = 1 - control.palm.x; // mirrored
                 const palmY = control.palm.y;
                 if (mem.lastPalmX != null && mem.lastPalmY != null && mem.lastTs != null) {
@@ -2153,9 +2427,15 @@
                         if (openStable && Math.abs(vxC) > 1.25 && Math.abs(vxC) > Math.abs(vyC) * 1.35) {
                             maybeHandleWave(vxC > 0 ? 'right' : 'left');
                         } else if (openStable) {
+                            const palmSpeed = Math.hypot(vxC, vyC);
                             const dx = (fx - mem.lastPalmX) * window.innerWidth;
                             const dy = (fy - mem.lastPalmY) * window.innerHeight;
-                            if (Math.hypot(dx, dy) > 3) handlePan(dx, dy);
+                            if (palmSpeed > 0.15 && Math.hypot(dx, dy) > 3) {
+                                // Active movement: pan and update velocity
+                                handlePan(dx, dy, dtSec);
+                            }
+                            // When hand is stationary (palmSpeed <= 0.15), panActive stays false
+                            // so the physics loop will apply momentum/inertia from the last velocity.
                         }
 
                         mem.lastPalmX = fx;
@@ -2178,44 +2458,93 @@
             const pinch = isPinched(control.landmarks);
             const wasPinched = !!mem.lastPinch;
             const pointBias = control.gesture === 'point' || (control.indexExt && (control.extCount || 0) <= 2);
-            const pinchDownThreshold = pointBias ? 0.34 : 0.48;
-            const pinchUpThreshold = pointBias ? 0.42 : 0.58;
+            const pinchDownThreshold = pointBias ? 0.42 : 0.55;
+            const pinchUpThreshold = pointBias ? 0.52 : 0.65;
             const pinchedNow = wasPinched ? (pinch.ratio < pinchUpThreshold) : (pinch.ratio < pinchDownThreshold);
-            const pinchDown = !wasPinched && pinchedNow;
-            const pinchUp = wasPinched && !pinchedNow;
-            mem.lastPinch = pinchedNow;
 
-            // If we drift onto a different node while holding a "clear" pinch, disarm to avoid accidental clears.
-            if (mem.clearArmed && pinchedNow && gestureHoverNodeId && (!gestureActiveNodeId || gestureHoverNodeId !== gestureActiveNodeId)) {
-                mem.clearArmed = false;
-                mem.clearArmedSince = 0;
+            // Frame-count confirmation: require 2 consecutive pinched frames before triggering pinchDown.
+            if (pinchedNow && !wasPinched) {
+                gestureSelect.pinchFrameCount += 1;
+            } else if (!pinchedNow) {
+                gestureSelect.pinchFrameCount = 0;
             }
+            const PINCH_CONFIRM_FRAMES = 2;
+            const confirmedPinch = pinchedNow && (wasPinched || gestureSelect.pinchFrameCount >= PINCH_CONFIRM_FRAMES);
 
-            const canSelect = (now - (gestureSelect.lastSelectTs || 0)) > 900;
+            const pinchDown = !wasPinched && confirmedPinch;
+            const pinchUp = wasPinched && !pinchedNow;
+            mem.lastPinch = confirmedPinch || (wasPinched && pinchedNow);
+
+            const DRAG_THRESHOLD_PX = 15; // screen-px movement to distinguish drag from select
+            const DOUBLE_PINCH_WINDOW = 500; // ms window for double-pinch detection
+
             if (pinchDown) {
-                if (gestureActiveNodeId && gestureHoverNodeId && gestureHoverNodeId === gestureActiveNodeId) {
-                    // Pinch on the already-selected node to arm a deselect on release.
-                    mem.clearArmed = true;
-                    mem.clearArmedSince = now;
-                } else if (canSelect && gestureHoverNodeId) {
-                    mem.clearArmed = false;
-                    mem.clearArmedSince = 0;
-                    gestureSelect.lastSelectTs = now;
+                // Double-pinch detection: two pinchDown events within the window → force deselect only.
+                const timeSinceLastUp = now - (gestureSelect.lastPinchUpTs || 0);
+                const isDoublePinch = timeSinceLastUp < DOUBLE_PINCH_WINDOW && gestureActiveNodeId;
+
+                if (isDoublePinch) {
+                    gestureClearSelection({ clearHistory: false });
+                } else if (gestureHoverNodeId) {
+                    // Single pinch on a node: select it and start potential drag.
                     gestureTraverseTo(gestureHoverNodeId, { pushHistory: true });
-                } else if (!gestureHoverNodeId && gestureActiveNodeId) {
-                    // Pinch on empty space to "arm" a deselect on release.
-                    mem.clearArmed = true;
-                    mem.clearArmedSince = now;
+                    gestureSelect.dragNodeId = gestureHoverNodeId;
+                    gestureSelect.dragStartX = mem.pointerX;
+                    gestureSelect.dragStartY = mem.pointerY;
+                    // Pin the node (same as force-graph drag start).
+                    const nodes = (graphData && Array.isArray(graphData.nodes)) ? graphData.nodes : [];
+                    const dragNode = nodes.find(n => n && String(n.id) === String(gestureHoverNodeId));
+                    if (dragNode && Number.isFinite(dragNode.x) && Number.isFinite(dragNode.y)) {
+                        dragNode.fx = dragNode.x;
+                        dragNode.fy = dragNode.y;
+                    }
                 }
             }
 
-            if (pinchUp && mem.clearArmed) {
-                mem.clearArmed = false;
-                mem.clearArmedSince = 0;
-                gestureClearSelection({ clearHistory: false });
+            // While holding pinch and dragging a node, update its position to follow the hand.
+            if (mem.lastPinch && gestureSelect.dragNodeId && mem.pointerX != null && mem.pointerY != null) {
+                const nodes = (graphData && Array.isArray(graphData.nodes)) ? graphData.nodes : [];
+                const dragNode = nodes.find(n => n && String(n.id) === String(gestureSelect.dragNodeId));
+                if (dragNode && Graph) {
+                    const graphPos = Graph.screen2GraphCoords(mem.pointerX, mem.pointerY);
+                    if (graphPos && Number.isFinite(graphPos.x) && Number.isFinite(graphPos.y)) {
+                        dragNode.fx = graphPos.x;
+                        dragNode.fy = graphPos.y;
+                        dragNode.x = graphPos.x;
+                        dragNode.y = graphPos.y;
+                    }
+                }
             }
 
-            // NOTE: Hop radius changes are disabled for now (they were too easy to trigger accidentally).
+            if (pinchUp) {
+                gestureSelect.lastPinchUpTs = now;
+
+                if (gestureSelect.dragNodeId) {
+                    // Determine if this was a drag or a tap based on movement.
+                    const dx = (mem.pointerX || 0) - (gestureSelect.dragStartX || 0);
+                    const dy = (mem.pointerY || 0) - (gestureSelect.dragStartY || 0);
+                    const movedDistance = Math.hypot(dx, dy);
+                    const wasDrag = movedDistance > DRAG_THRESHOLD_PX;
+
+                    if (wasDrag) {
+                        // Drag completed: leave node pinned at drop location, reheat sim.
+                        if (Graph && typeof Graph.d3ReheatSimulation === 'function') {
+                            Graph.d3ReheatSimulation();
+                        }
+                    } else {
+                        // Tap (no drag): unpin the node.
+                        const nodes = (graphData && Array.isArray(graphData.nodes)) ? graphData.nodes : [];
+                        const dragNode = nodes.find(n => n && String(n.id) === String(gestureSelect.dragNodeId));
+                        if (dragNode) {
+                            dragNode.fx = undefined;
+                            dragNode.fy = undefined;
+                        }
+                    }
+                    gestureSelect.dragNodeId = null;
+                    gestureSelect.dragStartX = null;
+                    gestureSelect.dragStartY = null;
+                }
+            }
 
             mem.lastGesture = control.gesture;
         }
@@ -2266,10 +2595,22 @@
             twoHandCandidateSince = 0;
             twoHandLostSince = 0;
             gestureState.lastSep = null;
+            gestureState.panVelocity.vx = 0;
+            gestureState.panVelocity.vy = 0;
+            gestureState.panActive = false;
+            gestureState.zoomVelocity = 0;
+            gestureState.zoomActive = false;
             gestureSelect.hoverId = null;
             gestureSelect.hoverSince = 0;
             gestureSelect.lastSelectTs = 0;
+            gestureSelect.pinchFrameCount = 0;
+            gestureSelect.dualPinchLastTs = 0;
+            gestureSelect.dragNodeId = null;
+            gestureSelect.dragStartX = null;
+            gestureSelect.dragStartY = null;
             zoomState.active = false;
+            zoomState.lastAngle = null;
+            zoomState.smoothAngle = null;
             pointerHistory.length = 0;
             lastVideoTime = -1;
             lastPointerTs = 0;
@@ -3595,8 +3936,9 @@
             if (next) {
                 if (!fromRestore) lastExpandedHeight = chatbox.offsetHeight;
                 chatbox.classList.add('collapsed');
-                const h = (chatHeader && chatHeader.offsetHeight) ? chatHeader.offsetHeight : 56;
-                chatbox.style.height = `${h}px`;
+                // CSS handles min-height:0 and height:auto; clear any inline height
+                // so the chatbox shrinks to just the header.
+                chatbox.style.height = '';
                 // Inline hide to override any previous prompt-row inline display.
                 if (promptRow) promptRow.style.display = 'none';
             } else {
@@ -3636,6 +3978,9 @@
 
         function repelGraphFromChatbox() {
             if (!Graph || !chatboxRect) return;
+            
+            // Skip repulsion during hand gesture mode to avoid visual interference.
+            if (gestureEnabled) return;
 
             const tl = Graph.screen2GraphCoords(chatboxRect.left, chatboxRect.top);
             const br = Graph.screen2GraphCoords(chatboxRect.right, chatboxRect.bottom);
@@ -3714,6 +4059,9 @@
             dragBtn.addEventListener('click', (e) => e.stopPropagation());
 
             dragBtn.addEventListener('pointerdown', e => {
+                // Disable drag during two-hand gesture mode to prevent accidental interaction
+                if (gestureTwoHandMode) return;
+
                 e.stopPropagation();
                 e.preventDefault();
 
@@ -3775,6 +4123,9 @@
             };
 
             resizeHandle.addEventListener('pointerdown', (e) => {
+                // Disable resize during two-hand gesture mode
+                if (gestureTwoHandMode) return;
+
                 e.stopPropagation();
                 e.preventDefault();
                 if (chatbox.classList.contains('collapsed')) return;
