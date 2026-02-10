@@ -182,13 +182,18 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS for local development
+    # CORS - Load allowed origins from environment
+    allowed_origins_env = os.environ.get("CORS_ORIGINS", "https://butlerian.xyz,https://www.butlerian.xyz")
+    allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+    
+    print(f"🔒 CORS allowed origins: {allowed_origins}")
+    
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
     )
 
     # Include WebSocket router
