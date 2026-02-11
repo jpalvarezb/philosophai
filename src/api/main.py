@@ -3,12 +3,23 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+from typing import Literal
+
+# Environment: "development" (local) vs "production" (Fly/cloud).
+# Set PHILOSOPH_ENV explicitly; if unset, we treat Fly (FLY_APP_NAME) as production, else development.
+def _env_mode() -> Literal["development", "production"]:
+    env = os.environ.get("PHILOSOPH_ENV", "").lower()
+    if env in ("dev", "development", "local"):
+        return "development"
+    if env in ("prod", "production") or os.environ.get("FLY_APP_NAME"):
+        return "production"
+    return "development"
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .ws import router as ws_router, set_agent, set_philosopher_agent
@@ -88,7 +99,12 @@ def init_components():
     from ..agents import MultiHopAgent, AgentTools, PhilosopherAgent
 
     # Config from environment
-    db_path = os.environ.get("PHILOSOPH_DB", "data/philosoph.duckdb")
+    db_path_raw = os.environ.get("PHILOSOPH_DB", "data/philosoph.duckdb")
+    db_path = Path(db_path_raw)
+    if not db_path.is_absolute():
+        # Resolve relative paths against project root (parent of src/)
+        _project_root = Path(__file__).resolve().parent.parent.parent
+        db_path = (_project_root / db_path_raw).resolve()
     openai_key = os.environ.get("OPENAI_API_KEY")
 
     if not openai_key:
@@ -97,7 +113,7 @@ def init_components():
     print(f"📂 Initializing with DB: {db_path}")
 
     # Storage
-    state.storage = DuckDBStorage(Path(db_path))
+    state.storage = DuckDBStorage(db_path)
 
     # Graph
     print("🏗️ Building graph...")
@@ -182,11 +198,16 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS - Load allowed origins from environment
-    allowed_origins_env = os.environ.get("CORS_ORIGINS", "https://butlerian.xyz,https://www.butlerian.xyz")
-    allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
-    
-    print(f"🔒 CORS allowed origins: {allowed_origins}")
+    # CORS - Environment-specific defaults; override with CORS_ORIGINS
+    mode = _env_mode()
+    if os.environ.get("CORS_ORIGINS"):
+        allowed_origins_env = os.environ.get("CORS_ORIGINS")
+    elif mode == "development":
+        allowed_origins_env = "http://localhost:8000,http://localhost:5713,http://localhost:3000,http://127.0.0.1:8000,http://127.0.0.1:5713,http://127.0.0.1:3000"
+    else:
+        allowed_origins_env = "https://butlerian.xyz,https://www.butlerian.xyz"
+    allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+    print(f"🔒 CORS ({mode}): {allowed_origins}")
     
     app.add_middleware(
         CORSMiddleware,
@@ -413,10 +434,21 @@ def create_app() -> FastAPI:
             "node_ids": nodes[:100],  # Cap for response size
         }
 
-    # Mount static UI files (if ui/ exists)
-    ui_path = Path(__file__).parent.parent.parent / "ui"
+    # Serve UI: catch-all route last so /api/* and /health match first (StaticFiles at "/" can take precedence otherwise)
+    ui_path = Path(__file__).resolve().parent.parent.parent / "ui"
     if ui_path.exists():
-        app.mount("/", StaticFiles(directory=str(ui_path), html=True), name="ui")
+        @app.get("/{full_path:path}")
+        async def serve_ui(full_path: str):
+            # Only serve UI for non-API paths (API routes are matched first)
+            if full_path.startswith("api") or full_path == "health" or full_path.startswith("docs") or full_path.startswith("openapi"):
+                raise HTTPException(status_code=404, detail="Not found")
+            path = (ui_path / full_path).resolve() if full_path else ui_path
+            if full_path and path.is_file() and path.parent.resolve().is_relative_to(ui_path.resolve()):
+                return FileResponse(path)
+            index = ui_path / "index.html"
+            if index.is_file():
+                return FileResponse(index)
+            raise HTTPException(status_code=404, detail="Not found")
 
     return app
 
@@ -424,6 +456,13 @@ def create_app() -> FastAPI:
 # For running with uvicorn
 app = create_app()
 
-if __name__ == "__main__":
+
+def main() -> None:
+    """Entry point for philosiphai-server console script."""
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+if __name__ == "__main__":
+    main()

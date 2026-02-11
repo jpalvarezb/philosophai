@@ -192,6 +192,50 @@ class AgentTools:
                 message=str(e),
             )
 
+    def get_seed_entities_for_communities(
+        self, community_ids: list[int], limit: int = 20
+    ) -> ToolResult:
+        """
+        Get entity node_ids that belong to the given communities.
+        Use these exact IDs with expand_node — communities are not graph nodes.
+        """
+        try:
+            if not community_ids:
+                return ToolResult(
+                    tool_name="get_seed_entities_for_communities",
+                    success=False,
+                    data=None,
+                    message="community_ids cannot be empty",
+                )
+            node_ids = self.storage.get_nodes_in_communities(community_ids)
+            # Only return nodes that exist in the graph; sort by degree (desc) so seeds have neighbors
+            in_graph = [nid for nid in node_ids if self.graph is not None and nid in self.graph]
+            if self.graph is not None:
+                in_graph.sort(key=lambda n: self.graph.degree(n), reverse=True)
+            capped = in_graph[: max(1, int(limit))]
+            # Include labels so the agent can choose
+            seed_list = []
+            for nid in capped:
+                label = self.graph_builder.get_node_label(nid) if self.graph_builder else nid
+                seed_list.append({"node_id": nid, "label": label})
+            return ToolResult(
+                tool_name="get_seed_entities_for_communities",
+                success=True,
+                data={
+                    "seeds": seed_list,
+                    "count": len(seed_list),
+                    "message": "Use expand_node(node_id) with one of these node_id values.",
+                },
+                message=f"Found {len(seed_list)} entity nodes in communities {community_ids}. Use expand_node with one of the node_id values.",
+            )
+        except Exception as e:
+            return ToolResult(
+                tool_name="get_seed_entities_for_communities",
+                success=False,
+                data=None,
+                message=str(e),
+            )
+
     def expand_node(self, node_id: str, max_neighbors: int = 10) -> ToolResult:
         """
         Get neighbors of a node with edge information.

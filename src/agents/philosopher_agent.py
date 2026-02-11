@@ -6,6 +6,7 @@ reasoning steps via the sequential_thinking tool.
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -120,25 +121,6 @@ other tool calls to document your reasoning.""",
     {
         "type": "function",
         "function": {
-            "name": "plan_next_steps",
-            "description": (
-                "Provide a brief plan for the next steps BEFORE traversal. "
-                "State the hop targets and tools you will call next."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "plan": {"type": "string", "description": "Short plan for upcoming steps"},
-                    "targets": {"type": "array", "items": {"type": "string"}, "description": "Planned nodes/communities to explore"},
-                    "tools": {"type": "array", "items": {"type": "string"}, "description": "Planned tool calls"},
-                },
-                "required": ["plan"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "detect_followup",
             "description": "Decide if the new query is a follow-up to recent QA context. Return IN if follow-up (reuse state), OUT if new topic.",
             "parameters": {
@@ -199,6 +181,21 @@ other tool calls to document your reasoning.""",
                     "community_id": {"type": "integer", "description": "Community ID to read"},
                 },
                 "required": ["community_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_seed_entities_for_communities",
+            "description": "Get entity node_ids that belong to the given community IDs. Use these exact node_id values with expand_node. Do NOT use community IDs (e.g. 'community-9') with expand_node — they are not graph nodes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "community_ids": {"type": "array", "items": {"type": "integer"}, "description": "Community IDs from search_community_reports"},
+                    "limit": {"type": "integer", "description": "Max entity nodes to return (default: 20)"},
+                },
+                "required": ["community_ids"],
             },
         },
     },
@@ -299,12 +296,20 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
     {
         "type": "function",
         "function": {
+            "name": "get_collected_chunks",
+            "description": "List chunk IDs collected from retrieval (search_vectors, search_community_reports). Use these IDs with get_chunk_content to read evidence, then cite them in synthesize_answer. Part of the citation flow.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "expand_node",
             "description": "Expand a node to see neighbors with traversal scores. Updates your current position in the graph. Each neighbor shows: traversal_score (0-1, higher=better path), score_breakdown (edge_wt, evidence, in_scope), predicate (relationship type). Use high-scoring in-scope neighbors for exploration.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "node_id": {"type": "string", "description": "Entity ID to expand (use exact IDs from get_entities_from_chunks)"},
+                    "node_id": {"type": "string", "description": "Entity ID to expand. Use exact node_id from get_entities_from_chunks or get_seed_entities_for_communities — NOT community IDs like 'community-9'."},
                     "max_neighbors": {"type": "integer", "description": "Maximum neighbors to return (default: 10)"},
                 },
                 "required": ["node_id"],
@@ -345,29 +350,8 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
         "type": "function",
         "function": {
             "name": "advance_to_traversal",
-            "description": "Advance from retrieval to traversal after planning the next steps.",
+            "description": "Advance from retrieval to traversal to explore the graph.",
             "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "constitutional_critique",
-            "description": (
-                "Perform a constitutional critique BEFORE synthesis. "
-                "Check the draft approach against the constitutional principles, "
-                "identify missing evidence, weak links, and risks."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "critique": {"type": "string", "description": "Critique of reasoning/evidence vs principles"},
-                    "principles_used": {"type": "array", "items": {"type": "string"}, "description": "Principle IDs referenced"},
-                    "missing_evidence": {"type": "array", "items": {"type": "string"}, "description": "Missing evidence or checks"},
-                    "risks": {"type": "array", "items": {"type": "string"}, "description": "Potential failure modes"},
-                },
-                "required": ["critique"],
-            },
         },
     },
     {
@@ -412,17 +396,10 @@ C6: Use a calm, brief refusal style and offer safe alternatives when refusing.
 
 ROLE_PROMPTS = {
     Phase.RETRIEVAL: (
-        "ROLE: Planner/Researcher. "
-        "Goal: gather evidence and plan multi-hop traversal. "
-        "You must call plan_next_steps before advance_to_traversal."
+        "ROLE: Researcher. Gather evidence via search, then advance_to_traversal or advance_to_synthesis."
     ),
     Phase.TRAVERSAL: (
-        "ROLE: Pathfinder. "
-        "Goal: expand nodes, read evidence between hops, and build a multi-hop trail."
-    ),
-    Phase.CRITIQUE: (
-        "ROLE: Constitutional Critic. "
-        "Goal: critique the draft approach against the constitutional principles and list gaps/risks."
+        "ROLE: Pathfinder. Do 2–3 expand_node steps, read chunks, then advance_to_synthesis. Do not over-expand."
     ),
     Phase.SYNTHESIS: (
         "ROLE: Synthesizer. "
@@ -432,7 +409,7 @@ ROLE_PROMPTS = {
 
 
 SYSTEM_PROMPT = (
-"""You are **Philo**, a scholarly knowledge agent for philosophy, theology, history, and culture.
+"""You are **Philo**, a scholarly knowledge agent for ethics, metaphysics, epistemology, theology, anthropology, and history.
 You reason rigorously, cite evidence, and traverse a knowledge graph of concepts, authors, works, and ideas.
 
 SAFETY & ETHICS (CRITICAL)
@@ -456,20 +433,13 @@ WORKFLOW (phase-gated)
 3) RETRIEVAL
    - Unscoped/global: search_community_reports(query) to find relevant communities -> read_community_summary to check topics -> search_vectors
    - Scoped: go straight to search_vectors(query) (communities are derived from scope)
-   - get_entities_from_chunks(chunk_ids, query) to score seeds; get_chunk_content to read evidence
-4) PLAN (REQUIRED BEFORE TRAVERSAL)
-   - Call plan_next_steps and name the hop targets + tools.
-   - Then call advance_to_traversal.
-5) TRAVERSAL (graph exploration)
-   - expand_node on high-scoring seeds
-   - If path is weak or node_in_scope is false -> backtrack, use get_traversal_state if lost
-   - Read evidence between hops (get_chunk_content after expand_node)
-   - Continue until you have enough evidence, then advance_to_synthesis
-6) CRITIQUE
-   - constitutional_critique before synthesis (identify missing evidence/risks; cite principles)
-   - advance_to_synthesis to enter synthesis after critique
-7) SYNTHESIS
-   - synthesize_answer with citations [1], [2], ... matching cited_chunk_ids order
+   - get_entities_from_chunks(chunk_ids, query) to score seeds; get_collected_chunks() then get_chunk_content(chunk_ids) to read evidence
+4) TRAVERSAL (optional, keep short)
+   - expand_node(node_id) needs a graph entity node_id from get_seed_entities_for_communities or get_entities_from_chunks. Do NOT use chunk IDs.
+   - Do 2–3 expand_node steps, then get_chunk_content on relevant chunks, then advance_to_synthesis. Hard cap: 5 nodes—do not over-expand.
+   - If path is weak or node_in_scope false, backtrack or get_traversal_state.
+5) SYNTHESIS
+   - synthesize_answer with inline citations [1], [2], ... matching cited_chunk_ids order
 
 SCORES & HOW TO USE THEM
 - Community Search (search_community_reports):
@@ -491,8 +461,8 @@ SCOPE & INDUCED SUBGRAPH
 - Only edges in scoped_edges are “in scope”; node_in_scope false means dead end under current scope.
 
 CITATIONS (AGGRESSIVE)
-- Cite only chunks you actually read via get_chunk_content.
-- Use [1], [2], ... in answer text; order matches cited_chunk_ids.
+- Cite only chunks you actually read via get_chunk_content. Use get_collected_chunks to see chunk IDs from retrieval.
+- Use [1], [2], ... in answer text; order matches cited_chunk_ids. ATLEAST 3 citations.
 - Cite every substantive factual claim or attribution; when in doubt, cite.
 - It is OK to place multiple citations in one sentence; do not leave uncited factual assertions.
 - Weave citations inside sentences.
@@ -501,10 +471,6 @@ CITATIONS (AGGRESSIVE)
 
 OUTPUT
 - Inline citations only; no bullet lists of sources and no trailing source sections.
-
-TRAVERSAL INTENSITY
-- Before synthesis, expand at least two promising edges when evidence exists; explore multiple communities if scores are close.
-- Backtrack when a path stalls; do not stop after a single hop unless the question is trivial or clearly irrelevant.
 
 STYLE
 - Scholarly, precise, high information density. Present multiple viewpoints when relevant. State uncertainty.
@@ -550,14 +516,14 @@ class PhilosopherAgent:
         self._citations: list = []
         self._last_qas: list[tuple[str, str]] = []  # keep last 5 (question, answer)
         self._new_edges_count: int = 0  # Track hops explored in the current turn
-        self._read_chunk_ids: set[str] = set()  # All chunks read this session
-        self._read_chunk_ids_this_turn: set[str] = set()  # Chunks read in the current turn
+        self._read_chunk_ids: set[str] = set()
+        self._read_chunk_ids_this_turn: set[str] = set()
         self._session_continued_current_turn: bool = False
-        self._plan_done: bool = False
-        self._plan: dict | None = None
-        self._critique_done: bool = False
-        self._critique: dict | None = None
-        self._requires_evidence_read: bool = False
+        _max = os.environ.get("PHILOSOPH_MAX_TRAVERSAL_NODES", "5")
+        try:
+            self._max_traversal_path_length = max(4, min(24, int(_max)))
+        except (TypeError, ValueError):
+            self._max_traversal_path_length = 5
         self._last_role_phase: Phase | None = None
         # Anti-stall: track iterations that do not execute an action tool
         self._thought_only_streak: int = 0
@@ -662,11 +628,6 @@ class PhilosopherAgent:
         self._read_chunk_ids = set()
         self._read_chunk_ids_this_turn = set()
         self._session_continued_current_turn = False
-        self._plan_done = False
-        self._plan = None
-        self._critique_done = False
-        self._critique = None
-        self._requires_evidence_read = False
         self._thought_only_streak = 0
         self._forced_tool_choice = None
         self._thought_only_streak = 0
@@ -681,6 +642,24 @@ class PhilosopherAgent:
         # Clear any active scope from previous query
         self.agent_tools.clear_active_scope()
 
+    def _path_edges(self) -> list[dict]:
+        """Build edge list from current path only (no neighbor cloud). At most len(path)-1 edges."""
+        out: list[dict] = []
+        path = self._traversal_path
+        if len(path) < 2:
+            return out
+        gb = getattr(self.agent_tools, "graph_builder", None)
+        for i in range(len(path) - 1):
+            u, v = path[i], path[i + 1]
+            label = "related"
+            if gb and gb.graph is not None and u in gb.graph:
+                for nid, pred, attrs in gb.get_neighbors(u):
+                    if nid == v:
+                        label = attrs.get("label", pred)
+                        break
+            out.append({"source": u, "target": v, "label": label})
+        return out
+
     def generate_greeting(self) -> str:
         """Short, varied self-intro inviting the user to ask a question."""
         if not self.llm_client:
@@ -688,8 +667,8 @@ class PhilosopherAgent:
         system_msg = SYSTEM_PROMPT + (
             "\n\nGREET QUICKLY:\n"
             "- Output exactly one sentence, under 22 words.\n"
-            "- Introduce yourself as Philo and mention your areas of focus.\n"
-            "- End by inviting the user's question.\n"
+            "- Introduce yourself as Philo and your specific domain.\n"
+            "- End by inviting the user's question or topic.\n"
             "- No citations, markdown, bullets, or lists."
         )
         try:
@@ -716,22 +695,22 @@ class PhilosopherAgent:
             "guard_relevance": "guard_relevance",
             "skip_guard": "skip_guard",
             "sequential_thinking": "sequential_thinking",
-            "plan_next_steps": "plan_next_steps",
             "list_available_sources": "list_available_sources",
             "set_scope": "set_scope",
             "skip_scope": "skip_scope",
             "clear_scope": "clear_scope",
             "search_vectors": "search_vectors",
             "search_community_reports": "search_community_reports",
+            "get_seed_entities_for_communities": "get_seed_entities_for_communities",
             "get_entities_from_chunks": "get_entities_from_chunks",
             "get_chunk_content": "get_chunk_content",
+            "get_collected_chunks": "get_collected_chunks",
             "advance_to_traversal": "advance_to_traversal",
             "expand_node": "expand_node",
             "backtrack": "backtrack",
             "get_traversal_state": "get_traversal_state",
             "advance_to_synthesis": "advance_to_synthesis",
             "synthesize_answer": "synthesize_answer",
-            "constitutional_critique": "constitutional_critique",
         }
         mapped_name = tool_mapping.get(tool_name, tool_name)
         if mapped_name not in allowed:
@@ -748,10 +727,9 @@ class PhilosopherAgent:
             Phase.GUARD: {Phase.SCOPE},
             Phase.SCOPE: {Phase.RETRIEVAL},
             Phase.RETRIEVAL: {Phase.TRAVERSAL, Phase.SYNTHESIS},
-            Phase.TRAVERSAL: {Phase.CRITIQUE},
-            Phase.CRITIQUE: {Phase.SYNTHESIS},
+            Phase.TRAVERSAL: {Phase.SYNTHESIS},
             Phase.SYNTHESIS: {Phase.DONE},
-            Phase.DONE: set(),  # Terminal - no transitions allowed
+            Phase.DONE: set(),
         }
 
         if to_phase not in valid_transitions.get(self._current_phase, set()):
@@ -792,8 +770,6 @@ class PhilosopherAgent:
             return "search_community_reports"
         if phase == Phase.TRAVERSAL:
             return "get_traversal_state"
-        if phase == Phase.CRITIQUE:
-            return "constitutional_critique"
         return None
 
     def _execute_tool(self, name: str, arguments: dict) -> str:
@@ -807,15 +783,6 @@ class PhilosopherAgent:
             result = self.agent_tools.sequential_thinking(**arguments)
             self._thoughts.append(result.data)
             return result.message
-
-        elif name == "plan_next_steps":
-            self._plan = {
-                "plan": arguments.get("plan", ""),
-                "targets": arguments.get("targets", []) or [],
-                "tools": arguments.get("tools", []) or [],
-            }
-            self._plan_done = True
-            return "Plan recorded. You may now advance to traversal."
 
         elif name == "detect_followup":
             question = arguments.get("question", "")
@@ -860,6 +827,18 @@ class PhilosopherAgent:
                 f"Top terms: {data['top_terms']}\n"
                 f"Summary: {data['summary']}"
             )
+
+        elif name == "get_seed_entities_for_communities":
+            result = self.agent_tools.get_seed_entities_for_communities(
+                community_ids=arguments.get("community_ids", []),
+                limit=arguments.get("limit", 20),
+            )
+            if not result.success:
+                return f"Error: {result.message}"
+            data = result.data
+            seeds = data.get("seeds", [])
+            lines = [f"- {s['node_id']} | {s['label']}" for s in seeds]
+            return f"{data.get('message', '')}\nSeeds:\n" + "\n".join(lines) if lines else result.message
 
         elif name == "list_available_sources":
             result = self.agent_tools.list_available_sources(arguments.get("category", "authors"))
@@ -911,8 +890,6 @@ class PhilosopherAgent:
         elif name == "advance_to_traversal":
             if self._current_phase != Phase.RETRIEVAL:
                 return "Traversal can only be entered from retrieval phase."
-            if not self._plan_done:
-                return "Plan required—call plan_next_steps before entering traversal."
             self._advance_phase(Phase.TRAVERSAL)
             return "Advanced to traversal phase."
 
@@ -956,8 +933,8 @@ class PhilosopherAgent:
             for cid, s in zip(comm_ids, scores):
                 lines.append(f"  - community {cid} | score={s:.3f}")
             if cited:
-                lines.append(f"Cited chunks from reports: {len(cited)}")
-            return "\\n".join(lines)
+                lines.append(f"Cited chunks from reports: {len(cited)}. Call get_collected_chunks to list chunk IDs, then get_chunk_content(ids) to read evidence for citations.")
+            return "\n".join(lines)
 
         elif name == "get_entities_from_chunks":
             result = self.agent_tools.get_entities_from_chunks(
@@ -984,7 +961,7 @@ class PhilosopherAgent:
                     top3 = [(e["label"], e["query_relevance"], e["reason"]) for e in entities[:3]]
                     trace_logger.info(f"[AGENT]    Top 3: {top3}")
 
-                # Do NOT auto-advance: traversal entry is gated by plan_next_steps + advance_to_traversal.
+                # Do NOT auto-advance: traversal entry is gated by advance_to_traversal.
 
                 # Format output with scores
                 lines = [f"Found {len(entities)} entities (scored by query relevance):"]
@@ -1001,7 +978,7 @@ class PhilosopherAgent:
                 self._collected_entities.extend(entity_ids)
                 self._collected_entities = list(dict.fromkeys(self._collected_entities))
                 trace_logger.info(f"[AGENT] 🏷️ Extracted {len(entity_ids)} entities (unscored)")
-                # Do NOT auto-advance: traversal entry is gated by plan_next_steps + advance_to_traversal.
+                # Do NOT auto-advance: traversal entry is gated by advance_to_traversal.
                 self._emit_event({
                     "type": "entities",
                     "entities": entity_ids,
@@ -1019,26 +996,39 @@ class PhilosopherAgent:
                 if cid:
                     self._read_chunk_ids.add(cid)
                     self._read_chunk_ids_this_turn.add(cid)
-            # Evidence read satisfies the between-hops requirement
-            self._requires_evidence_read = False
             lines = [f"[{c['id']}]\n{c['content']}\n" for c in chunks]
             return "\n---\n".join(lines)
 
+        elif name == "get_collected_chunks":
+            ids = self._collected_chunks
+            if not ids:
+                return "No chunks collected yet. Run search_vectors or search_community_reports first."
+            sample = ids[:25] if len(ids) > 25 else ids
+            line = ", ".join(sample) + (" ..." if len(ids) > 25 else "")
+            return f"Collected chunks ({len(ids)}): use these chunk_ids with get_chunk_content to read evidence, then cite them in synthesize_answer.\n{line}"
+
         elif name == "expand_node":
-            if self._requires_evidence_read:
-                return "Read evidence first—call get_chunk_content before expanding another node."
+            if len(self._traversal_path) >= self._max_traversal_path_length:
+                return (
+                    f"Traversal limit reached ({self._max_traversal_path_length} nodes). "
+                    "You have enough context—call get_chunk_content on the most relevant chunks, then advance_to_synthesis."
+                )
             result = self.agent_tools.expand_node(
                 arguments.get("node_id", ""),
                 max_neighbors=arguments.get("max_neighbors", 10),
             )
             if not result.success:
-                return f"Error: {result.message}"
+                msg = result.message
+                if "not found in graph" in msg:
+                    msg += " Use entity node_ids from get_seed_entities_for_communities or get_entities_from_chunks, not chunk IDs."
+                return f"Error: {msg}"
             data = result.data
             source_id = data["node_id"]
             source_label = data["label"]
 
             # Update traversal state - track where we are in the graph
             self._current_node = source_id
+            path_before = len(self._traversal_path)
             if source_id not in self._traversal_path:
                 self._traversal_path.append(source_id)
                 self._traversal_history.append({
@@ -1048,28 +1038,10 @@ class PhilosopherAgent:
                     "in_scope_neighbors": data.get("in_scope_neighbors", 0),
                     "step": len(self._traversal_path),
                 })
-
-            # Track explored edges (only in-scope ones for strict scope)
-            added_in_scope = 0
-            new_edges = []
-            for n in data["neighbors"]:
-                if n.get("in_scope", True):  # Only track in-scope edges
-                    self._traversed_edges.append({
-                        "source": source_id,
-                        "target": n["node_id"],
-                        "label": n["predicate"],
-                    })
-                    new_edges.append({
-                        "source": source_id,
-                        "target": n["node_id"],
-                        "label": n["predicate"],
-                    })
-                    added_in_scope += 1
-
-            # Count one hop per successful expansion (not per neighbor listed)
-            if added_in_scope > 0:
+            # Only track path edges (actual walk), not every neighbor — avoids graph explosion
+            self._traversed_edges = self._path_edges()
+            if len(self._traversal_path) >= 2 and len(self._traversal_path) > path_before:
                 self._new_edges_count += 1
-            self._requires_evidence_read = True
 
             # Build output with scope info
             node_in_scope = data.get("node_in_scope", True)
@@ -1077,34 +1049,23 @@ class PhilosopherAgent:
             trace_logger.info(f"[AGENT]    Edges: {data.get('total_neighbors', len(data['neighbors']))} total, {data.get('in_scope_neighbors', '?')} in-scope")
             trace_logger.info(f"[AGENT]    Path: {' → '.join(self._traversal_path[-5:])}")
 
-            traversal_nodes = []
+            # Emit only path nodes and path edges (no neighbor cloud)
             graph = self.agent_tools.graph
             node_to_community = self.agent_tools.node_to_community
-            if source_id:
-                traversal_nodes.append({
-                    "id": source_id,
-                    "label": source_label,
-                    "community": data.get("community_id"),
-                    "degree": graph.degree(source_id) if graph is not None and source_id in graph else 0,
-                })
-            for n in data["neighbors"]:
-                nid = n.get("node_id")
-                if not nid:
-                    continue
+            traversal_nodes = []
+            for nid in self._traversal_path:
+                node_data = graph.nodes.get(nid, {}) if graph is not None and nid in graph else {}
                 traversal_nodes.append({
                     "id": nid,
-                    "label": n.get("label", nid),
+                    "label": node_data.get("label", nid),
                     "community": node_to_community.get(nid),
                     "degree": graph.degree(nid) if graph is not None and nid in graph else 0,
                 })
-
-            if new_edges or traversal_nodes:
-                normalized_edges = self._normalize_edge_list(new_edges)
+            if traversal_nodes or self._traversed_edges:
+                normalized_edges = self._normalize_edge_list(self._traversed_edges)
                 normalized_nodes = self._normalize_node_list(traversal_nodes)
                 normalized_nodes = self._ensure_nodes_for_edges(normalized_nodes, normalized_edges)
-                collected_entities = self._normalize_entity_list(
-                    [source_id] + [e.get("target") for e in normalized_edges]
-                )
+                collected_entities = self._normalize_entity_list(list(self._traversal_path))
                 self._emit_event({
                     "type": "traversal",
                     "traversal": {"edges": normalized_edges},
@@ -1160,6 +1121,7 @@ class PhilosopherAgent:
                 else:
                     self._traversal_path = self._traversal_path[:-steps]
                 self._current_node = self._traversal_path[-1] if self._traversal_path else None
+            self._traversed_edges = self._path_edges()
 
             # Build response
             if self._current_node:
@@ -1203,38 +1165,19 @@ class PhilosopherAgent:
             return "\n".join(lines)
 
         elif name == "advance_to_synthesis":
-            if self._current_phase == Phase.CRITIQUE:
-                if not self._critique_done:
-                    return "Critique required—call constitutional_critique before synthesis."
-                self._advance_phase(Phase.SYNTHESIS)
-                return "Advanced to synthesis phase. Now call synthesize_answer with your response."
-
             if self._current_phase != Phase.TRAVERSAL:
                 return (
                     "Traversal required—enter traversal phase and call expand_node before synthesis. "
                     "If needed, get_entities_from_chunks and then advance_to_traversal."
                 )
-            # Ensure traversal has actually started this turn
             if not self._traversal_history:
                 return "Traversal not started—call expand_node to begin."
-            # Ensure we have actively traversed new edges this turn
-            if self._new_edges_count < 2:
-                return "Traversal too shallow—expand_node along at least two NEW promising edges before synthesis."
-            # Ensure we have read evidence this turn (prevents generic, ungrounded repeats)
+            if self._new_edges_count < 1:
+                return "Expand at least one node—call expand_node, then get_chunk_content on relevant chunks, then advance_to_synthesis."
             if not self._read_chunk_ids_this_turn:
                 return "No new evidence read yet—call get_chunk_content on the most relevant chunks before synthesis."
-            self._advance_phase(Phase.CRITIQUE)
-            return "Advanced to critique phase. Call constitutional_critique, then advance_to_synthesis."
-
-        elif name == "constitutional_critique":
-            self._critique = {
-                "critique": arguments.get("critique", ""),
-                "principles_used": arguments.get("principles_used", []) or [],
-                "missing_evidence": arguments.get("missing_evidence", []) or [],
-                "risks": arguments.get("risks", []) or [],
-            }
-            self._critique_done = True
-            return "Critique recorded. Call advance_to_synthesis to proceed."
+            self._advance_phase(Phase.SYNTHESIS)
+            return "Advanced to synthesis phase. Now call synthesize_answer with your response."
 
         elif name == "synthesize_answer":
             answer = _strip_trailing_citation_inventory(arguments.get("answer", ""))
@@ -1297,11 +1240,6 @@ class PhilosopherAgent:
         self._final_answer = ""
         self._citations = []
         self._thoughts = []
-        self._plan_done = False
-        self._plan = None
-        self._critique_done = False
-        self._critique = None
-        self._requires_evidence_read = False
 
         # Decide whether to reuse prior state (follow-up) or start fresh
         recent_qas_str = [f"Q: {q}\nA: {a}" for q, a in self._last_qas[-5:]]
@@ -1450,8 +1388,15 @@ class PhilosopherAgent:
                         "content": "Please continue by calling the appropriate tool. Remember to use sequential_thinking to document your reasoning.",
                     })
 
-        # Build traversal node metadata for nodes seen during traversal/collection
+        # Build traversal node metadata for nodes seen during traversal/collection.
+        # If the agent answered from retrieval only (never called get_entities_from_chunks or expand_node),
+        # derive entities from cited chunks so the graph can still show evidence nodes.
         traversal_node_ids = set(self._collected_entities)
+        if not traversal_node_ids and self._collected_chunks:
+            result = self.agent_tools.get_entities_from_chunks(self._collected_chunks, query="")
+            if result.success and result.data.get("entity_ids"):
+                for eid in result.data["entity_ids"]:
+                    traversal_node_ids.add(eid)
         for e in self._traversed_edges:
             traversal_node_ids.add(e.get("source"))
             traversal_node_ids.add(e.get("target"))
@@ -1486,7 +1431,8 @@ class PhilosopherAgent:
         normalized_edges = self._normalize_edge_list(self._traversed_edges)
         normalized_nodes = self._normalize_node_list(traversal_nodes_meta)
         normalized_nodes = self._ensure_nodes_for_edges(normalized_nodes, normalized_edges)
-        normalized_entities = self._normalize_entity_list(self._collected_entities)
+        # Send all node IDs we have (traversal + derived from chunks) so the graph can highlight evidence
+        normalized_entities = self._normalize_entity_list(list(traversal_node_ids))
 
         return {
             "answer": self._final_answer or "No answer was synthesized within the iteration limit.",
