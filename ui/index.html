@@ -877,8 +877,11 @@
     (function() {
         'use strict';
 
-        const API_BASE = 'http://localhost:8000';
-        const WS_BASE = API_BASE.replace(/^http/, 'ws');
+        const isLocal = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+        const API_BASE = isLocal && window.location.port !== '8000'
+            ? `${window.location.protocol}//${window.location.hostname}:8000`
+            : isLocal ? '' : window.location.origin;
+        const WS_BASE = API_BASE ? API_BASE.replace(/^http/, 'ws') : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
         const AGENT_WS_URL = `${WS_BASE}/api/ws/agent`;
         let Graph;
         let graphData = { nodes: [], links: [] };
