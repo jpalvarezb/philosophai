@@ -1081,8 +1081,8 @@ class PhilosopherAgent:
             trace_logger.info(f"[AGENT]    Edges: {data.get('total_neighbors', len(data['neighbors']))} total, {data.get('in_scope_neighbors', '?')} in-scope")
             trace_logger.info(f"[AGENT]    Path: {' → '.join(self._traversal_path[-5:])}")
 
-            # Emit path + limited one-hop neighbors per path node so the graph shows edges (connected structure)
-            display_edges, neighbor_ids = self._display_edges(max_neighbors_per_node=4)
+            # Emit path + limited one-hop neighbors per path node (cap to avoid graph explosion)
+            display_edges, neighbor_ids = self._display_edges(max_neighbors_per_node=2)
             graph = self.agent_tools.graph
             node_to_community = self.agent_tools.node_to_community
             traversal_nodes = []
@@ -1442,18 +1442,18 @@ class PhilosopherAgent:
                         "content": "Please continue by calling the appropriate tool. Remember to use sequential_thinking to document your reasoning.",
                     })
 
-        # Build traversal node metadata for nodes seen during traversal/collection.
-        # If the agent answered from retrieval only (never called get_entities_from_chunks or expand_node),
-        # derive entities from cited chunks so the graph can still show evidence nodes.
-        traversal_node_ids = set(self._collected_entities)
+        # Build traversal node metadata: only path + neighbors from display edges (avoid graph explosion).
+        # If the agent never traversed, derive a small set from cited chunks for evidence nodes.
+        display_edges, display_neighbor_ids = self._display_edges(max_neighbors_per_node=2)
+        traversal_node_ids = set(self._traversal_path) | display_neighbor_ids
+        for e in display_edges:
+            traversal_node_ids.add(e.get("source"))
+            traversal_node_ids.add(e.get("target"))
         if not traversal_node_ids and self._collected_chunks:
             result = self.agent_tools.get_entities_from_chunks(self._collected_chunks, query="")
             if result.success and result.data.get("entity_ids"):
-                for eid in result.data["entity_ids"]:
+                for eid in result.data["entity_ids"][:15]:
                     traversal_node_ids.add(eid)
-        for e in self._traversed_edges:
-            traversal_node_ids.add(e.get("source"))
-            traversal_node_ids.add(e.get("target"))
         traversal_nodes_meta = []
         if traversal_node_ids:
             G = self.agent_tools.graph
@@ -1482,8 +1482,7 @@ class PhilosopherAgent:
         self._last_qas.append((question, self._final_answer or ""))
         self._last_qas = self._last_qas[-5:]
 
-        # Use path + one-hop neighbor edges so the response always has edges connecting nodes (not just isolated nodes)
-        display_edges, _ = self._display_edges(max_neighbors_per_node=4)
+        # Use path + limited one-hop neighbor edges (same display_edges as above, keeps node set small)
         normalized_edges = self._normalize_edge_list(display_edges)
         normalized_nodes = self._normalize_node_list(traversal_nodes_meta)
         normalized_nodes = self._ensure_nodes_for_edges(normalized_nodes, normalized_edges)

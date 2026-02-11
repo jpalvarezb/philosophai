@@ -2998,22 +2998,25 @@
                 }
             }
 
-            // Entities-only events
+            // Entities: cap to avoid graph explosion (only add up to MAX_EXTRA_ENTITY_NODES beyond traversal_nodes/edges)
+            const MAX_EXTRA_ENTITY_NODES = 20;
             if (Array.isArray(data.collected_entities)) {
+                let added = 0;
                 for (const rawId of data.collected_entities) {
+                    if (nextNodesById.has(String(rawId))) continue;
+                    if (added >= MAX_EXTRA_ENTITY_NODES) break;
                     const node = ensureNextNode(rawId);
-                    if (node) traversalNodes.add(String(node.id));
+                    if (node) { traversalNodes.add(String(node.id)); added++; }
                 }
             }
 
-            // Ensure citation source nodes exist so hover can focus them
+            // Ensure every cited node appears (no cap — user needs to see all cited evidence)
             if (Array.isArray(citationData)) {
                 for (const c of citationData) {
-                    if (c && Array.isArray(c.node_ids)) {
-                        for (const rawId of c.node_ids) {
-                            const node = ensureNextNode(rawId);
-                            if (node) traversalNodes.add(String(node.id));
-                        }
+                    if (!c || !Array.isArray(c.node_ids)) continue;
+                    for (const rawId of c.node_ids) {
+                        const node = ensureNextNode(rawId);
+                        if (node) traversalNodes.add(String(node.id));
                     }
                 }
             }
