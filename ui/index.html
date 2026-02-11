@@ -3018,11 +3018,45 @@
                 }
             }
 
-            // Hand off atomically (setGraphData will normalize and rebuild neighbors)
+            placeNewNodesNearNeighbors(next);
             setGraphData(next, 'processTraversal');
             if (Graph && typeof Graph.d3ReheatSimulation === 'function') Graph.d3ReheatSimulation();
             if (Graph) Graph.nodeCanvasObject(Graph.nodeCanvasObject());
             scheduleZoomToFitLoadedGraph();
+        }
+
+        function placeNewNodesNearNeighbors(next) {
+            const nodeMap = new Map(next.nodes.map(n => [String(n.id), n]));
+            const getOther = (link, id) => {
+                const s = link.source && typeof link.source === 'object' ? link.source.id : link.source;
+                const t = link.target && typeof link.target === 'object' ? link.target.id : link.target;
+                const sid = String(s), tid = String(t);
+                return sid === id ? nodeMap.get(tid) : tid === id ? nodeMap.get(sid) : null;
+            };
+            const hasPos = (n) => n && typeof n.x === 'number' && typeof n.y === 'number';
+            const placed = new Set();
+            next.nodes.forEach(n => { if (hasPos(n)) placed.add(String(n.id)); });
+            let changed = true;
+            while (changed) {
+                changed = false;
+                next.nodes.forEach(n => {
+                    const nid = String(n.id);
+                    if (placed.has(nid)) return;
+                    let sumX = 0, sumY = 0, count = 0;
+                    next.links.forEach(link => {
+                        const other = getOther(link, nid);
+                        if (!other || !hasPos(other)) return;
+                        sumX += other.x; sumY += other.y; count++;
+                    });
+                    if (count > 0) {
+                        n.x = sumX / count + (Math.random() - 0.5) * 80;
+                        n.y = sumY / count + (Math.random() - 0.5) * 80;
+                        n.fx = n.x; n.fy = n.y;
+                        placed.add(nid);
+                        changed = true;
+                    }
+                });
+            }
         }
 
         function setGraphData(data, from) {
@@ -3794,9 +3828,6 @@
             Graph.d3Force('charge').strength(-120);
             Graph.d3Force('link').distance(120);
             Graph.onEngineTick(() => {
-                repelGraphFromChatbox();
-                // NOTE: If the simulation crashes mid-tick, this won't run.
-                // That's why we also have an interval-based watchdog.
                 checkForceGraphInternalData('engineTick');
             });
 
@@ -3977,61 +4008,6 @@
             a.click();
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 250);
-        }
-
-        function repelGraphFromChatbox() {
-            if (!Graph || !chatboxRect) return;
-            
-            // Skip repulsion during hand gesture mode to avoid visual interference.
-            if (gestureEnabled) return;
-
-            const tl = Graph.screen2GraphCoords(chatboxRect.left, chatboxRect.top);
-            const br = Graph.screen2GraphCoords(chatboxRect.right, chatboxRect.bottom);
-            if (!tl || !br) return;
-
-            const minX = Math.min(tl.x, br.x);
-            const maxX = Math.max(tl.x, br.x);
-            const minY = Math.min(tl.y, br.y);
-            const maxY = Math.max(tl.y, br.y);
-
-            const midX = (minX + maxX) / 2;
-            const midY = (minY + maxY) / 2;
-            const halfW = (maxX - minX) / 2;
-            const halfH = (maxY - minY) / 2;
-
-            const k = Graph.zoom();
-            const pad = 25 / k; // Padding in graph units
-
-            graphData.nodes.forEach(node => {
-                if (!node || typeof node !== 'object') return;
-                if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
-
-                // Ensure velocity fields exist
-                if (!Number.isFinite(node.vx)) node.vx = 0;
-                if (!Number.isFinite(node.vy)) node.vy = 0;
-
-                const dx = node.x - midX;
-                const dy = node.y - midY;
-                const adx = Math.abs(dx);
-                const ady = Math.abs(dy);
-
-                const overlapX = (halfW + pad) - adx;
-                const overlapY = (halfH + pad) - ady;
-
-                if (overlapX > 0 && overlapY > 0) {
-                    // Push out along shortest axis
-                    const strength = 2.0;
-                    if (overlapX < overlapY) {
-                        const sign = dx > 0 ? 1 : -1;
-                        node.vx += sign * strength;
-                        node.x += sign * (strength * 0.1);
-                    } else {
-                        const sign = dy > 0 ? 1 : -1;
-                        node.vy += sign * strength;
-                        node.y += sign * (strength * 0.1);
-                    }
-                }
-            });
         }
 
         function enableDragging() {

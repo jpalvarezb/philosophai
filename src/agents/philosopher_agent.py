@@ -660,6 +660,38 @@ class PhilosopherAgent:
             out.append({"source": u, "target": v, "label": label})
         return out
 
+    def _display_edges(self, max_neighbors_per_node: int = 4) -> tuple[list[dict], set[str]]:
+        """Path edges plus up to max_neighbors_per_node one-hop neighbor edges per path node so the graph shows connected structure."""
+        path_edge_keys: set[tuple[str, str]] = set()
+        for e in self._traversed_edges:
+            a, b = str(e.get("source", "")), str(e.get("target", ""))
+            if a and b:
+                path_edge_keys.add((a, b))
+                path_edge_keys.add((b, a))
+        display_edges: list[dict] = list(self._traversed_edges)
+        neighbor_ids: set[str] = set()
+        gb = getattr(self.agent_tools, "graph_builder", None)
+        if gb and gb.graph is not None:
+            for nid in self._traversal_path:
+                nid_str = str(nid)
+                count = 0
+                for neighbor_id, _pred, attrs in gb.get_neighbors(nid_str):
+                    if count >= max_neighbors_per_node:
+                        break
+                    tgt = str(neighbor_id)
+                    if (nid_str, tgt) in path_edge_keys:
+                        continue
+                    path_edge_keys.add((nid_str, tgt))
+                    path_edge_keys.add((tgt, nid_str))
+                    display_edges.append({
+                        "source": nid_str,
+                        "target": tgt,
+                        "label": attrs.get("label", _pred),
+                    })
+                    neighbor_ids.add(tgt)
+                    count += 1
+        return (display_edges, neighbor_ids)
+
     def generate_greeting(self) -> str:
         """Short, varied self-intro inviting the user to ask a question."""
         if not self.llm_client:
@@ -1049,11 +1081,28 @@ class PhilosopherAgent:
             trace_logger.info(f"[AGENT]    Edges: {data.get('total_neighbors', len(data['neighbors']))} total, {data.get('in_scope_neighbors', '?')} in-scope")
             trace_logger.info(f"[AGENT]    Path: {' → '.join(self._traversal_path[-5:])}")
 
-            # Emit only path nodes and path edges (no neighbor cloud)
+            # Emit path + limited one-hop neighbors per path node so the graph shows edges (connected structure)
+            display_edges, neighbor_ids = self._display_edges(max_neighbors_per_node=4)
             graph = self.agent_tools.graph
             node_to_community = self.agent_tools.node_to_community
             traversal_nodes = []
+            seen = set()
             for nid in self._traversal_path:
+                nid_str = str(nid)
+                if nid_str in seen:
+                    continue
+                seen.add(nid_str)
+                node_data = graph.nodes.get(nid_str, {}) if graph is not None and nid_str in graph else {}
+                traversal_nodes.append({
+                    "id": nid_str,
+                    "label": node_data.get("label", nid_str),
+                    "community": node_to_community.get(nid_str),
+                    "degree": graph.degree(nid_str) if graph is not None and nid_str in graph else 0,
+                })
+            for nid in neighbor_ids:
+                if nid in seen:
+                    continue
+                seen.add(nid)
                 node_data = graph.nodes.get(nid, {}) if graph is not None and nid in graph else {}
                 traversal_nodes.append({
                     "id": nid,
@@ -1061,11 +1110,11 @@ class PhilosopherAgent:
                     "community": node_to_community.get(nid),
                     "degree": graph.degree(nid) if graph is not None and nid in graph else 0,
                 })
-            if traversal_nodes or self._traversed_edges:
-                normalized_edges = self._normalize_edge_list(self._traversed_edges)
+            if traversal_nodes or display_edges:
+                normalized_edges = self._normalize_edge_list(display_edges)
                 normalized_nodes = self._normalize_node_list(traversal_nodes)
                 normalized_nodes = self._ensure_nodes_for_edges(normalized_nodes, normalized_edges)
-                collected_entities = self._normalize_entity_list(list(self._traversal_path))
+                collected_entities = self._normalize_entity_list(list(self._traversal_path) + list(neighbor_ids))
                 self._emit_event({
                     "type": "traversal",
                     "traversal": {"edges": normalized_edges},
@@ -1172,7 +1221,12 @@ class PhilosopherAgent:
                 )
             if not self._traversal_history:
                 return "Traversal not started—call expand_node to begin."
-            if self._new_edges_count < 1:
+            # Allow synthesis if we have at least one path edge, or we've hit the traversal limit (path full)
+            has_enough_traversal = (
+                self._new_edges_count >= 1
+                or len(self._traversal_path) >= self._max_traversal_path_length
+            )
+            if not has_enough_traversal:
                 return "Expand at least one node—call expand_node, then get_chunk_content on relevant chunks, then advance_to_synthesis."
             if not self._read_chunk_ids_this_turn:
                 return "No new evidence read yet—call get_chunk_content on the most relevant chunks before synthesis."
@@ -1428,7 +1482,9 @@ class PhilosopherAgent:
         self._last_qas.append((question, self._final_answer or ""))
         self._last_qas = self._last_qas[-5:]
 
-        normalized_edges = self._normalize_edge_list(self._traversed_edges)
+        # Use path + one-hop neighbor edges so the response always has edges connecting nodes (not just isolated nodes)
+        display_edges, _ = self._display_edges(max_neighbors_per_node=4)
+        normalized_edges = self._normalize_edge_list(display_edges)
         normalized_nodes = self._normalize_node_list(traversal_nodes_meta)
         normalized_nodes = self._ensure_nodes_for_edges(normalized_nodes, normalized_edges)
         # Send all node IDs we have (traversal + derived from chunks) so the graph can highlight evidence

@@ -220,10 +220,10 @@ def create_app() -> FastAPI:
     # Include WebSocket router
     app.include_router(ws_router, prefix="/api")
 
-    # Health check
+    # Health check (includes app version for deploy verification)
     @app.get("/health")
     async def health():
-        return {"status": "ok", "ready": state.ready}
+        return {"status": "ok", "ready": state.ready, "version": app.version}
 
     # Query endpoint (non-streaming)
     @app.post("/api/query", response_model=QueryResponse)
