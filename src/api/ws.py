@@ -166,7 +166,7 @@ async def websocket_agent(websocket: WebSocket):
     """
     WebSocket endpoint for streaming agentic query execution.
     
-    Client sends: {"question": "...", "max_iterations": 30}
+    Client sends: {"question": "...", "max_iterations": 25}
     Server streams: {"type": "status|thought|routing|traversal|complete|error", ...}
     """
     await manager.connect(websocket)
@@ -175,7 +175,7 @@ async def websocket_agent(websocket: WebSocket):
             data = await websocket.receive_text()
             request = json.loads(data)
             question = request.get("question", "")
-            max_iterations = request.get("max_iterations", 30)
+            max_iterations = request.get("max_iterations", 25)
 
             if not question:
                 await manager.send_json(websocket, {

@@ -2654,7 +2654,7 @@
                 });
                 videoEl.srcObject = stream;
                 await videoEl.play();
-                appendLine('system', 'Camera enabled. Gestures:\n• Point to hover nodes\n• Pinch to select (pinch on empty space, then release to clear)\n• Open palm to pan; left/right/up/down\n• Two hands to zoom');
+                appendLine('system', 'Camera enabled. Gestures:\n• Point to hover nodes\n• Pinch to select and drag a node (double pinch to clear)\n• Open palm to pan; left/right/up/down\n• Two hands to zoom and rotate');
             } catch (err) {
                 console.error('getUserMedia failed', err);
                 const name = err && err.name ? err.name : 'Error';
