@@ -1,7 +1,9 @@
 """FastAPI application for PhilosophAI with GraphRAG."""
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -22,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from .ws import router as ws_router, set_agent, set_philosopher_agent
+from .ws import router as ws_router, set_agent, set_philosopher_agent, set_philosopher_agent_factory
 
 
 # --- Pydantic Models ---
@@ -54,6 +56,7 @@ class AgentQueryRequest(BaseModel):
     question: str
     max_iterations: int = 25
     verbose: bool = False
+    session_id: str | None = None  # Optional; echoed in response for ordering/tracking
 
 
 class AgentQueryResponse(BaseModel):
@@ -67,6 +70,8 @@ class AgentQueryResponse(BaseModel):
     thoughts: list[dict]
     iterations: int
     session_continued: bool = False
+    session_id: str | None = None  # Echo of request session_id, if provided
+    sequence_id: int = 0  # Monotonic id per response; client can use to order or detect out-of-order
 
 
 # --- Application State ---
@@ -81,10 +86,37 @@ class AppState:
         self.citation_builder = None
         self.node_to_community = {}
         self.openai_client = None
+        self.vector_search = None  # For per-request PhilosopherAgent creation
         self.ready = False
 
 
 state = AppState()
+
+# Lock for any use of the shared philosopher_agent (e.g. reset_session)
+_shared_philosopher_agent_lock = threading.Lock()
+
+# Monotonic sequence for agent query responses (ordering / out-of-order detection)
+_query_sequence_lock = threading.Lock()
+_query_sequence_counter = 0
+
+
+def _create_philosopher_agent():
+    """Create a new PhilosopherAgent with its own AgentTools for concurrent, isolated queries."""
+    from ..agents import AgentTools, PhilosopherAgent
+
+    tools = AgentTools(
+        state.storage,
+        state.graph_builder,
+        state.vector_search,
+        state.node_to_community,
+    )
+    return PhilosopherAgent(
+        agent_tools=tools,
+        citation_builder=state.citation_builder,
+        llm_client=state.openai_client,
+        llm_model="gpt-4o",
+        verbose=False,
+    )
 
 
 def init_components():
@@ -134,6 +166,7 @@ def init_components():
     print("🔧 Initializing agent...")
     client = OpenAI(api_key=openai_key)
     vector_search = VectorSearch(state.storage, client)
+    state.vector_search = vector_search
     fusion = ResultFusion(state.storage)
     state.citation_builder = CitationBuilder(state.storage, state.node_to_community)
 
@@ -175,6 +208,7 @@ def init_components():
     # Share agents with WebSocket module
     set_agent(state.agent)
     set_philosopher_agent(state.philosopher_agent)
+    set_philosopher_agent_factory(_create_philosopher_agent)
 
     state.ready = True
     print("✅ PhilosophAI ready!")
@@ -194,7 +228,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="PHILO-001",
         description="Knowledge Graph RAG with Community Routing",
-        version="0.6.2",
+        version="0.7.0",
         lifespan=lifespan,
     )
 
@@ -254,51 +288,71 @@ def create_app() -> FastAPI:
         )
         return result
 
-    # Agentic query endpoint (CrewAI-based with sequential thinking)
+    # Agentic query endpoint (PhilosopherAgent with sequential thinking)
     @app.post("/api/agent/query", response_model=AgentQueryResponse)
     async def agent_query(request: AgentQueryRequest):
         """
         Execute an agentic query with sequential thinking.
 
-        This endpoint uses CrewAI to orchestrate tool calling with
-        explicit reasoning steps. The agent:
-        1. Determines appropriate scope by calling list_available_sources
-        2. Sets scope if needed, or skips for broad queries
-        3. Searches for relevant evidence
-        4. Explores the knowledge graph
-        5. Synthesizes an answer with citations
-
-        All reasoning is documented via the sequential_thinking tool.
+        Runs in a thread pool so multiple users can run queries concurrently;
+        each request gets an isolated agent instance. Ordering is not guaranteed:
+        responses may complete out of request order; use sequence_id to order or
+        detect out-of-order delivery.
         """
-        if not state.ready or not state.philosopher_agent:
+        if not state.ready:
             raise HTTPException(status_code=503, detail="Agent not initialized")
 
-        try:
-            result = state.philosopher_agent.query(
+        global _query_sequence_counter
+        with _query_sequence_lock:
+            next_seq = _query_sequence_counter
+            _query_sequence_counter += 1
+
+        def run_query():
+            agent = _create_philosopher_agent()
+            return agent.query(
                 question=request.question,
                 max_iterations=request.max_iterations,
             )
+
+        try:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, run_query)
+            result["sequence_id"] = next_seq
+            result["session_id"] = request.session_id
             return result
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    # Agentic greeting (LLM-generated)
+    # Agentic greeting (LLM-generated); uses fresh agent so concurrent greetings don't share state
     @app.post("/api/agent/reset")
     async def agent_reset():
         if not state.ready or not state.philosopher_agent:
             raise HTTPException(status_code=503, detail="Agent not initialized")
+
+        def do_reset():
+            with _shared_philosopher_agent_lock:
+                state.philosopher_agent.reset_session()
+
         try:
-            state.philosopher_agent.reset_session()
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, do_reset)
             return {"status": "ok", "message": "Session reset"}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/api/agent/greeting")
     async def agent_greeting():
-        if not state.ready or not state.philosopher_agent:
+        if not state.ready:
             raise HTTPException(status_code=503, detail="Agent not initialized")
+
+        def do_greeting():
+            agent = _create_philosopher_agent()
+            return agent.generate_greeting()
+
         try:
-            return {"greeting": state.philosopher_agent.generate_greeting()}
+            loop = asyncio.get_event_loop()
+            greeting = await loop.run_in_executor(None, do_greeting)
+            return {"greeting": greeting}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 

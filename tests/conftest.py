@@ -34,6 +34,7 @@ def reset_api_state():
         "citation_builder": api_main.state.citation_builder,
         "node_to_community": dict(api_main.state.node_to_community or {}),
         "openai_client": api_main.state.openai_client,
+        "vector_search": getattr(api_main.state, "vector_search", None),
     }
 
     try:
@@ -48,3 +49,5 @@ def reset_api_state():
         api_main.state.citation_builder = old["citation_builder"]
         api_main.state.node_to_community = old["node_to_community"]
         api_main.state.openai_client = old["openai_client"]
+        if "vector_search" in old:
+            api_main.state.vector_search = old["vector_search"]

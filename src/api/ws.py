@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -15,6 +15,7 @@ router = APIRouter()
 # Agent instance (set by main.py at startup)
 _agent: "MultiHopAgent | None" = None
 _philosopher_agent: "PhilosopherAgent | None" = None
+_philosopher_agent_factory: "Callable[[], PhilosopherAgent] | None" = None
 
 
 def set_agent(agent: "MultiHopAgent"):
@@ -27,6 +28,12 @@ def set_philosopher_agent(agent: "PhilosopherAgent"):
     """Set the philosopher agent instance for WebSocket handlers."""
     global _philosopher_agent
     _philosopher_agent = agent
+
+
+def set_philosopher_agent_factory(factory: "Callable[[], PhilosopherAgent]"):
+    """Set a factory that creates a new PhilosopherAgent per query (for concurrent users)."""
+    global _philosopher_agent_factory
+    _philosopher_agent_factory = factory
 
 
 class ConnectionManager:
@@ -184,7 +191,8 @@ async def websocket_agent(websocket: WebSocket):
                 })
                 continue
 
-            if not _philosopher_agent:
+            agent = (_philosopher_agent_factory() if _philosopher_agent_factory else _philosopher_agent)
+            if not agent:
                 await manager.send_json(websocket, {
                     "type": "error",
                     "message": "Agent not initialized",
@@ -212,7 +220,7 @@ async def websocket_agent(websocket: WebSocket):
 
             def run_query():
                 try:
-                    _philosopher_agent.query_streaming(
+                    agent.query_streaming(
                         question=question,
                         on_event=emit_event,
                         max_iterations=max_iterations,
