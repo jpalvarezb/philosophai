@@ -449,6 +449,53 @@
         #drag-btn { right: 44px; }
         #save-btn { right: 16px; }
 
+        .save-popover {
+            position: absolute;
+            top: 100%;
+            right: 16px;
+            margin-top: 4px;
+            width: max-content;
+            min-width: 180px;
+            background: #000;
+            border: 3px solid #fff;
+            box-shadow: none;
+            z-index: 200;
+            padding: 0;
+            font-family: 'VT323', monospace;
+            font-size: 18px;
+            letter-spacing: 0;
+            clip-path: polygon(
+                4px 0, calc(100% - 4px) 0,
+                calc(100% - 4px) 4px, 100% 4px,
+                100% calc(100% - 4px), calc(100% - 4px) calc(100% - 4px),
+                calc(100% - 4px) 100%, 4px 100%,
+                4px calc(100% - 4px), 0 calc(100% - 4px),
+                0 4px, 4px 4px
+            );
+        }
+        .save-popover[hidden] { display: none !important; }
+        .save-popover-item {
+            display: block;
+            width: 100%;
+            padding: 10px 14px;
+            text-align: left;
+            background: none;
+            border: none;
+            border-bottom: 1px solid rgba(255,255,255,0.25);
+            color: #fff;
+            font: inherit;
+            cursor: pointer;
+        }
+        .save-popover-item:last-child { border-bottom: none; }
+        .save-popover-item:hover, .save-popover-item:focus {
+            background: rgba(255,255,255,0.08);
+            color: #00ff8a;
+        }
+        .save-popover-item:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
         #drag-btn {
             cursor: grab;
             touch-action: none;
@@ -768,11 +815,15 @@
                 </svg>
             </button>
 
-            <button id="save-btn" class="icon-btn" title="Save" aria-label="Save chat">
+            <button id="save-btn" class="icon-btn" title="Save" aria-label="Save chat" aria-haspopup="true" aria-expanded="false">
                 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M4 3h14v4h2v14H4V3zm2 2v14h12V9h-2V5H6zm2 0h6v4H8V5zm0 8h8v2H8v-2z" fill="#fff"/>
                 </svg>
             </button>
+            <div id="save-popover" class="save-popover" role="menu" aria-label="Save options" hidden>
+                <button type="button" class="save-popover-item" data-action="transcript" role="menuitem">Transcript (.txt)</button>
+                <button type="button" class="save-popover-item" data-action="field" role="menuitem">Field (.html)</button>
+            </div>
         </div>
         <div id="chat-log" aria-live="polite">
             <div id="prompt-row">
@@ -896,6 +947,12 @@
         let citationAnswerSeq = 0;
         let citationHoverSeq = 0;
         let chatboxRect = null;
+
+        // Export state: in-memory conversation for Save Transcript / Export Field (no server persistence)
+        const exportMessages = [];
+        const exportGraphTrace = { used_nodes: [], used_edges: [], cited_node_ids: [] };
+        const exportNodeLabels = new Map(); // node_id -> label (for export payload)
+        let exportConversationId = null; // from GET /api/conversation; sent with embed/export, maps to correct graph when serving
 
         // Invariant watchdog: periodically checks the *internal* force-graph graphData() state.
         // Goal: catch any primitive nodes (strings) before/when the simulation crashes.
@@ -1426,6 +1483,10 @@
         function bootSequence() {
             disablePrompt();
             const thinker = startThinkingLine();
+            fetch(`${API_BASE}/api/conversation`)
+                .then(res => res.ok ? res.json() : Promise.resolve({}))
+                .then(data => { exportConversationId = data.conversation_id || null; })
+                .catch(() => { exportConversationId = null; });
             fetch(`${API_BASE}/api/agent/greeting`)
                 .then(res => res.ok ? res.json() : Promise.reject(new Error('greeting failed')))
                 .then(data => {
@@ -1480,6 +1541,11 @@
             citationData = [];
             citationStore.clear();
             citationAnswerSeq = 0;
+            exportMessages.length = 0;
+            exportGraphTrace.used_nodes = [];
+            exportGraphTrace.used_edges = [];
+            exportGraphTrace.cited_node_ids = [];
+            exportNodeLabels.clear();
 
             resetGraphToBase();
             restoreInitialUiState({ duration: 600 });
@@ -2777,9 +2843,25 @@
         }
 
         if (saveBtn) {
+            const savePopover = document.getElementById('save-popover');
             saveBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                saveChatToFile();
+                if (savePopover) {
+                    const open = savePopover.hidden;
+                    savePopover.hidden = !open;
+                    saveBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                }
+            });
+            document.addEventListener('click', (e) => {
+                if (savePopover && !savePopover.hidden && !savePopover.contains(e.target) && saveBtn && !saveBtn.contains(e.target)) closeSavePopover();
+            });
+        }
+        const savePopoverEl = document.getElementById('save-popover');
+        if (savePopoverEl) {
+            savePopoverEl.addEventListener('click', (e) => {
+                const action = e.target?.closest?.('[data-action]')?.getAttribute('data-action');
+                if (action === 'transcript') saveTranscript();
+                else if (action === 'field') exportField();
             });
         }
 
@@ -2793,6 +2875,7 @@
             if (!question) return;
 
             appendLine('user', question);
+            exportMessages.push({ role: 'user', content: question, created_at: new Date().toISOString() });
             promptInput.value = '';
             disablePrompt();
 
@@ -2837,6 +2920,63 @@
                 if (data.traversal || data.traversal_nodes || data.collected_entities) {
                     processTraversal(data);
                 }
+
+                // Accumulate for export: philo message + citations (export shape)
+                const exportCitations = (localCitations || []).map(c => {
+                    const nodeId = (c.node_ids && c.node_ids[0]) ? String(c.node_ids[0]) : null;
+                    const nodeLabel = nodeId ? (exportNodeLabels.get(nodeId) || graphData?.nodes?.find(n => String(n.id) === nodeId)?.label || nodeId) : null;
+                    return {
+                        citation_id: c.chunk_id || (nodeId ? `${nodeId}::${c.chunk_id}` : c.chunk_id),
+                        node_id: nodeId,
+                        node_label: nodeLabel,
+                        author: c.author ?? null,
+                        work_title: c.work ?? c.title ?? null,
+                        year: c.year ?? null,
+                        chunk_id: c.chunk_id,
+                        chunk_text: c.full_content ?? c.chunk_content ?? '',
+                        locator: c.locator ?? null
+                    };
+                });
+                exportMessages.push({
+                    role: 'philo',
+                    content: data.answer || '',
+                    created_at: new Date().toISOString(),
+                    citations: exportCitations
+                });
+                // Merge traversal into export graph trace
+                const seenNodeIds = new Set(exportGraphTrace.used_nodes.map(n => n.id));
+                const seenEdgeKeys = new Set(exportGraphTrace.used_edges.map(e => `${e.source}\t${e.target}`));
+                (data.traversal_nodes || []).forEach(n => {
+                    if (!n || n.id == null) return;
+                    const id = String(n.id);
+                    if (seenNodeIds.has(id)) return;
+                    seenNodeIds.add(id);
+                    exportNodeLabels.set(id, n.label || id);
+                    exportGraphTrace.used_nodes.push({ id, label: n.label || id, type: n.type ?? null, metadata: n.metadata || {} });
+                });
+                (data.traversal?.edges || []).forEach(e => {
+                    const src = e.source != null ? String(e.source) : e.from;
+                    const tgt = e.target != null ? String(e.target) : e.to;
+                    if (!src || !tgt) return;
+                    const key = `${src}\t${tgt}`;
+                    if (seenEdgeKeys.has(key)) return;
+                    seenEdgeKeys.add(key);
+                    exportGraphTrace.used_edges.push({ source: src, target: tgt, predicate: e.predicate ?? e.label ?? null });
+                });
+                (localCitations || []).forEach(c => {
+                    (c.node_ids || []).forEach(nid => {
+                        const id = String(nid);
+                        if (!exportGraphTrace.cited_node_ids.includes(id)) exportGraphTrace.cited_node_ids.push(id);
+                        const existing = exportGraphTrace.used_nodes.find(n => n.id === id);
+                        if (!existing && graphData?.nodes) {
+                            const n = graphData.nodes.find(nn => String(nn.id) === id);
+                            if (n) {
+                                exportGraphTrace.used_nodes.push({ id, label: n.label || id, type: n.type ?? null, metadata: {} });
+                                exportNodeLabels.set(id, n.label || id);
+                            }
+                        }
+                    });
+                });
 
                 const formattedAnswer = sanitizeAnswer(data.answer, localCitations, { answerId }) || '...';
                 thinker.complete(formattedAnswer, { trusted: true });
@@ -3059,6 +3199,35 @@
                         changed = true;
                     }
                 });
+            }
+        }
+
+        function loadFieldViewerState(state) {
+            const graph = state.graph || {};
+            const layout = state.layout || {};
+            const positions = layout.positions || {};
+            const viewport = layout.viewport || { panX: 0, panY: 0, zoom: 1 };
+            const nodes = (graph.nodes || []).map(n => {
+                const id = String(n.id);
+                const pos = positions[id];
+                const node = { id, label: n.label || id, val: 5, neighbors: [], _dynamic: true };
+                if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+                    node.x = pos.x;
+                    node.y = pos.y;
+                    node.fx = pos.x;
+                    node.fy = pos.y;
+                }
+                return node;
+            });
+            const links = (graph.edges || []).map(e => ({
+                source: String(e.source != null ? e.source : e.from),
+                target: String(e.target != null ? e.target : e.to),
+                label: e.predicate || ''
+            }));
+            setGraphData({ nodes, links }, 'fieldViewer');
+            if (Graph && typeof Graph.centerAt === 'function' && typeof Graph.zoom === 'function') {
+                Graph.centerAt(viewport.panX || 0, viewport.panY || 0, 0);
+                Graph.zoom(viewport.zoom || 1, 0);
             }
         }
 
@@ -3989,28 +4158,133 @@
             updateChatboxRect();
         }
 
-        function saveChatToFile() {
-            const lines = Array.from(chatLog.querySelectorAll('.chat-line'));
-            const out = lines.map(line => {
-                const role = line.classList.contains('user') ? 'USER'
-                    : line.classList.contains('system') ? 'SYSTEM'
-                    : 'AI';
-                const textEl = line.querySelector('.line-text');
-                const text = textEl ? (textEl.innerText || '').trimEnd() : '';
-                return `${role}: ${text}`;
-            }).join('\n\n');
+        function buildExportPayload() {
+            const now = new Date().toISOString();
+            const title = (exportMessages.find(m => m.role === 'user')?.content || 'PhilosophAI export').slice(0, 80);
+            const usedIds = new Set(exportGraphTrace.used_nodes.map(n => String(n.id)));
+            exportGraphTrace.used_edges.forEach(e => {
+                if (e.source) usedIds.add(String(e.source));
+                if (e.target) usedIds.add(String(e.target));
+            });
+            let graph_snapshot = null;
+            let graph_viewport = null;
+            if (graphData?.nodes?.length && Array.isArray(graphData.links)) {
+                const nodes = graphData.nodes
+                    .filter(n => n && n.id != null && usedIds.has(String(n.id)))
+                    .map(n => ({
+                        id: String(n.id),
+                        label: n.label || n.id,
+                        x: typeof n.x === 'number' ? n.x : 0,
+                        y: typeof n.y === 'number' ? n.y : 0
+                    }))
+                    .filter(n => Number.isFinite(n.x) && Number.isFinite(n.y));
+                const nodeIds = new Set(nodes.map(n => n.id));
+                const links = (graphData.links || [])
+                    .filter(l => l && nodeIds.has(String(l.source?.id ?? l.source)) && nodeIds.has(String(l.target?.id ?? l.target)))
+                    .map(l => ({
+                        source: String(l.source?.id ?? l.source),
+                        target: String(l.target?.id ?? l.target),
+                        label: l.label || l.predicate || ''
+                    }));
+                if (nodes.length) graph_snapshot = { nodes, links };
+                if (typeof Graph !== 'undefined' && Graph && typeof Graph.zoom === 'function' && typeof Graph.screen2GraphCoords === 'function') {
+                    const z = Graph.zoom();
+                    const c = Graph.screen2GraphCoords(window.innerWidth / 2, window.innerHeight / 2);
+                    graph_viewport = { panX: c && c.x != null ? c.x : 0, panY: c && c.y != null ? c.y : 0, zoom: z || 1 };
+                }
+            }
+            return {
+                conversation_id: exportConversationId,
+                title,
+                created_at: now,
+                messages: exportMessages.map((m, i) => ({
+                    id: `msg_${i}`,
+                    role: m.role,
+                    content: m.content,
+                    created_at: m.created_at,
+                    citations: m.citations || []
+                })),
+                graph_trace: {
+                    used_nodes: exportGraphTrace.used_nodes.slice(),
+                    used_edges: exportGraphTrace.used_edges.slice(),
+                    cited_node_ids: exportGraphTrace.cited_node_ids.slice()
+                },
+                graph_snapshot: graph_snapshot,
+                graph_viewport: graph_viewport
+            };
+        }
 
-            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const name = `philosiphai-chat-${stamp}.txt`;
-            const blob = new Blob([out || ''], { type: 'text/plain;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = name;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 250);
+        function philoArtifactFilename(type, ext) {
+            const d = new Date();
+            const pad = n => String(n).padStart(2, '0');
+            const stamp = `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+            return `philo_artifact_${stamp}_${type}.${ext}`;
+        }
+
+        function closeSavePopover() {
+            const popover = document.getElementById('save-popover');
+            if (popover) { popover.hidden = true; saveBtn?.setAttribute('aria-expanded', 'false'); }
+        }
+
+        async function saveTranscript() {
+            closeSavePopover();
+            if (!exportMessages.length) { alert('Send a message first to save a transcript.'); return; }
+            const payload = buildExportPayload();
+            try {
+                const res = await fetch(`${API_BASE}/api/export/transcript`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                if (!res.ok) {
+                    let msg = res.statusText || 'Export failed';
+                    try {
+                        const j = await res.json();
+                        if (j && j.detail) msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
+                    } catch (_) {}
+                    throw new Error(msg);
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = 'philo_transcript.txt'; document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 250);
+            } catch (err) {
+                console.error(err);
+                alert('Could not save transcript: ' + (err.message || 'network error'));
+            }
+        }
+
+        async function exportField() {
+            closeSavePopover();
+            if (!exportMessages.length) {
+                alert('Send a message first so the graph snapshot is available to embed.');
+                return;
+            }
+            const payload = buildExportPayload();
+            try {
+                const res = await fetch(`${API_BASE}/api/embed/field`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                if (!res.ok) {
+                    let msg = res.statusText || 'Export failed';
+                    try {
+                        const j = await res.json();
+                        if (j && j.detail) msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
+                    } catch (_) {}
+                    throw new Error(msg);
+                }
+                const data = await res.json();
+                const embedUrl = data.conversation_embed_url || data.embed_url;
+                if (!embedUrl) throw new Error('No embed URL returned');
+                if (data.html) {
+                    const blob = new Blob([data.html], { type: 'text/html;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a'); a.href = url; a.download = 'philo_graph.html'; document.body.appendChild(a); a.click(); a.remove();
+                    setTimeout(() => URL.revokeObjectURL(url), 250);
+                }
+                try {
+                    await navigator.clipboard.writeText(embedUrl);
+                } catch (_) {}
+                const fileNote = data.html ? ' File saved to your Downloads. Link copied to clipboard—paste it anywhere (e.g. Notion /embed).' : ' Link copied to clipboard—paste it anywhere (e.g. Notion /embed).';
+                alert('Shareable link created.' + fileNote);
+            } catch (err) {
+                console.error(err);
+                alert('Could not create shareable embed: ' + (err.message || 'network error'));
+            }
         }
 
         function enableDragging() {
@@ -4166,6 +4440,29 @@
 
         enableDragging();
         enableResizing();
+        const pathname = window.location.pathname || '';
+        const isFieldViewer = pathname.startsWith('/field');
+        if (isFieldViewer) {
+            const chatboxEl = document.getElementById('chatbox');
+            if (chatboxEl) chatboxEl.style.display = 'none';
+            const stateUrl = new URLSearchParams(window.location.search).get('state_url');
+            if (!stateUrl) {
+                document.getElementById('loading-text').innerText = 'Missing state_url. Use /field?state_url=URL_TO_YOUR_JSON';
+                try { document.getElementById('loading').style.display = 'flex'; } catch (_) {}
+                throw new Error('Field viewer requires state_url');
+            }
+            fetch(stateUrl)
+                .then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); })
+                .then(state => {
+                    initGraph();
+                    loadFieldViewerState(state);
+                    document.getElementById('loading').style.display = 'none';
+                })
+                .catch(err => {
+                    document.getElementById('loading-text').innerText = 'Failed to load state: ' + (err.message || 'unknown');
+                });
+            return;
+        }
         try {
             updateChatboxRect();
             initGraph();

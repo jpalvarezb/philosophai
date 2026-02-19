@@ -584,3 +584,48 @@ class DuckDBStorage:
         except Exception:
             # Table doesn't exist yet
             return []
+
+    # -------------------------------------------------------------------------
+    # Embed artifacts (shareable field HTML; no FK to conversations)
+    # -------------------------------------------------------------------------
+    def ensure_embed_artifacts_table(self) -> None:
+        """Create embed_artifacts table if not exists. Separate table; no joins."""
+        self.con.execute("""
+            CREATE TABLE IF NOT EXISTS embed_artifacts (
+                embed_id VARCHAR PRIMARY KEY,
+                html TEXT NOT NULL,
+                conversation_id VARCHAR,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+    def save_embed_artifact(
+        self,
+        embed_id: str,
+        html: str,
+        conversation_id: str | None = None,
+    ) -> None:
+        """Store field HTML for shareable embed URL. Call ensure_embed_artifacts_table first."""
+        self.ensure_embed_artifacts_table()
+        self.con.execute(
+            "INSERT INTO embed_artifacts (embed_id, html, conversation_id) VALUES (?, ?, ?)",
+            [embed_id, html, conversation_id],
+        )
+
+    def get_embed_html(self, embed_id: str) -> str | None:
+        """Return stored HTML for embed_id, or None if not found."""
+        row = self.con.execute(
+            "SELECT html FROM embed_artifacts WHERE embed_id = ? LIMIT 1",
+            [embed_id],
+        ).fetchone()
+        return row[0] if row else None
+
+    def get_embed_html_by_conversation(self, conversation_id: str) -> str | None:
+        """Return HTML for the latest embed artifact for this conversation_id, or None."""
+        if not conversation_id:
+            return None
+        row = self.con.execute(
+            "SELECT html FROM embed_artifacts WHERE conversation_id = ? ORDER BY created_at DESC LIMIT 1",
+            [conversation_id],
+        ).fetchone()
+        return row[0] if row else None

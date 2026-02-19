@@ -19,9 +19,11 @@ def _env_mode() -> Literal["development", "production"]:
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+import uuid
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
 from .ws import router as ws_router, set_agent, set_philosopher_agent, set_philosopher_agent_factory
@@ -487,6 +489,83 @@ def create_app() -> FastAPI:
             "summary": row["summary"],
             "node_ids": nodes[:100],  # Cap for response size
         }
+
+    # Export artifacts (client sends payload; no conversation storage)
+    @app.post("/api/export/transcript", response_class=PlainTextResponse)
+    async def export_transcript(payload: dict[str, Any]):
+        """Generate TXT transcript with renumbered citations. Body: export payload (messages + graph_trace)."""
+        from .export_artifacts import build_transcript_text
+        try:
+            text = build_transcript_text(payload)
+            return PlainTextResponse(content=text, media_type="text/plain; charset=utf-8")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/api/export/report-html")
+    async def export_report_html(payload: dict[str, Any]):
+        """Generate interactive HTML report (zoom/pan graph). Body: export payload (messages + graph_trace)."""
+        try:
+            from .export_artifacts import build_report_html
+            html = build_report_html(payload)
+            return Response(content=html, media_type="text/html; charset=utf-8")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    # Conversation ID: client gets an id to tag exports/embeds so serving can map to the correct graph
+    @app.get("/api/conversation")
+    async def get_conversation_id():
+        """Return a new conversation ID for this session. Client sends it when exporting; serve by conversation_id maps to the correct graph."""
+        return {"conversation_id": str(uuid.uuid4())}
+
+    # Shareable embed (store field HTML in DuckDB; serve at GET with embed-friendly headers)
+    @app.post("/api/embed/field")
+    async def create_embed_field(request: Request, payload: dict[str, Any]):
+        """Store graph-only field HTML and return shareable URL. Body: same as export payload; include conversation_id from GET /api/conversation."""
+        if not state.storage:
+            raise HTTPException(status_code=503, detail="Storage not available")
+        try:
+            from .export_artifacts import build_report_html
+            payload_embed = {**payload, "embed_only": True}
+            html = build_report_html(payload_embed)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        embed_id = str(uuid.uuid4())
+        conversation_id = payload.get("conversation_id")
+        state.storage.save_embed_artifact(embed_id, html, conversation_id=conversation_id)
+        base = str(request.base_url).rstrip("/")
+        embed_url = f"{base}/api/embed/field/{embed_id}"
+        out = {"embed_id": embed_id, "embed_url": embed_url, "html": html}
+        if conversation_id:
+            out["conversation_embed_url"] = f"{base}/api/embed/field/conversation/{conversation_id}"
+        return out
+
+    @app.get("/api/embed/field/{embed_id}")
+    async def get_embed_field(embed_id: str):
+        """Serve stored field HTML with headers that allow iframe embedding (e.g. Notion)."""
+        if not state.storage:
+            raise HTTPException(status_code=503, detail="Storage not available")
+        html = state.storage.get_embed_html(embed_id)
+        if html is None:
+            raise HTTPException(status_code=404, detail="Embed not found")
+        return Response(
+            content=html,
+            media_type="text/html; charset=utf-8",
+            headers={"Content-Security-Policy": "frame-ancestors *"},
+        )
+
+    @app.get("/api/embed/field/conversation/{conversation_id}")
+    async def get_embed_field_by_conversation(conversation_id: str):
+        """Serve latest stored field HTML for this conversation_id (same embed-friendly headers). Maps conversation → correct graph."""
+        if not state.storage:
+            raise HTTPException(status_code=503, detail="Storage not available")
+        html = state.storage.get_embed_html_by_conversation(conversation_id)
+        if html is None:
+            raise HTTPException(status_code=404, detail="No embed found for this conversation")
+        return Response(
+            content=html,
+            media_type="text/html; charset=utf-8",
+            headers={"Content-Security-Policy": "frame-ancestors *"},
+        )
 
     # Serve UI: catch-all route last so /api/* and /health match first (StaticFiles at "/" can take precedence otherwise)
     ui_path = Path(__file__).resolve().parent.parent.parent / "ui"
