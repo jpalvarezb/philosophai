@@ -230,7 +230,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="PHILO-001",
         description="Knowledge Graph RAG with Community Routing",
-        version="0.7.0",
+        version="0.7.1",
         lifespan=lifespan,
     )
 
