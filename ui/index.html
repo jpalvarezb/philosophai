@@ -952,8 +952,6 @@
         const exportMessages = [];
         const exportGraphTrace = { used_nodes: [], used_edges: [], cited_node_ids: [] };
         const exportNodeLabels = new Map(); // node_id -> label (for export payload)
-        let exportConversationId = null; // from GET /api/conversation; sent with embed/export, maps to correct graph when serving
-
         // Invariant watchdog: periodically checks the *internal* force-graph graphData() state.
         // Goal: catch any primitive nodes (strings) before/when the simulation crashes.
         const graphInvariant = {
@@ -1483,10 +1481,6 @@
         function bootSequence() {
             disablePrompt();
             const thinker = startThinkingLine();
-            fetch(`${API_BASE}/api/conversation`)
-                .then(res => res.ok ? res.json() : Promise.resolve({}))
-                .then(data => { exportConversationId = data.conversation_id || null; })
-                .catch(() => { exportConversationId = null; });
             fetch(`${API_BASE}/api/agent/greeting`)
                 .then(res => res.ok ? res.json() : Promise.reject(new Error('greeting failed')))
                 .then(data => {
@@ -4194,7 +4188,6 @@
                 }
             }
             return {
-                conversation_id: exportConversationId,
                 title,
                 created_at: now,
                 messages: exportMessages.map((m, i) => ({
@@ -4214,12 +4207,6 @@
             };
         }
 
-        function philoArtifactFilename(type, ext) {
-            const d = new Date();
-            const pad = n => String(n).padStart(2, '0');
-            const stamp = `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-            return `philo_artifact_${stamp}_${type}.${ext}`;
-        }
 
         function closeSavePopover() {
             const popover = document.getElementById('save-popover');
@@ -4228,8 +4215,9 @@
 
         async function saveTranscript() {
             closeSavePopover();
-            if (!exportMessages.length) { alert('Send a message first to save a transcript.'); return; }
+            if (!exportMessages.length) { alert('Start a conversation first to save a transcript.'); return; }
             const payload = buildExportPayload();
+            const filename = nextDownloadFilename('transcript');
             try {
                 const res = await fetch(`${API_BASE}/api/export/transcript`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 if (!res.ok) {
@@ -4242,7 +4230,7 @@
                 }
                 const blob = await res.blob();
                 const url = URL.createObjectURL(blob);
-                const a = document.createElement('a'); a.href = url; a.download = 'philo_transcript.txt'; document.body.appendChild(a); a.click(); a.remove();
+                const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
                 setTimeout(() => URL.revokeObjectURL(url), 250);
             } catch (err) {
                 console.error(err);
@@ -4250,15 +4238,24 @@
             }
         }
 
+        function nextDownloadFilename(prefix, ext) {
+            const key = prefix === 'graph' ? 'philo_graph_download_num' : 'philo_transcript_download_num';
+            let n = parseInt(localStorage.getItem(key) || '0', 10) + 1;
+            localStorage.setItem(key, String(n));
+            if (prefix === 'graph') return `philo_graph(${n}).html`;
+            return `PHILO-001 Transcript(${n}).txt`;
+        }
+
         async function exportField() {
             closeSavePopover();
             if (!exportMessages.length) {
-                alert('Send a message first so the graph snapshot is available to embed.');
+                alert('Start a conversation first so the graph is available to download.');
                 return;
             }
             const payload = buildExportPayload();
+            const filename = nextDownloadFilename('graph');
             try {
-                const res = await fetch(`${API_BASE}/api/embed/field`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const res = await fetch(`${API_BASE}/api/export/field-html`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 if (!res.ok) {
                     let msg = res.statusText || 'Export failed';
                     try {
@@ -4268,22 +4265,15 @@
                     throw new Error(msg);
                 }
                 const data = await res.json();
-                const embedUrl = data.conversation_embed_url || data.embed_url;
-                if (!embedUrl) throw new Error('No embed URL returned');
-                if (data.html) {
-                    const blob = new Blob([data.html], { type: 'text/html;charset=utf-8' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a'); a.href = url; a.download = 'philo_graph.html'; document.body.appendChild(a); a.click(); a.remove();
-                    setTimeout(() => URL.revokeObjectURL(url), 250);
-                }
-                try {
-                    await navigator.clipboard.writeText(embedUrl);
-                } catch (_) {}
-                const fileNote = data.html ? ' File saved to your Downloads. Link copied to clipboard—paste it anywhere (e.g. Notion /embed).' : ' Link copied to clipboard—paste it anywhere (e.g. Notion /embed).';
-                alert('Shareable link created.' + fileNote);
+                if (!data.html) throw new Error('No HTML returned');
+                const blob = new Blob([data.html], { type: 'text/html;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 250);
+                alert('Graph saved as ' + filename + '. Open it in your browser to view.');
             } catch (err) {
                 console.error(err);
-                alert('Could not create shareable embed: ' + (err.message || 'network error'));
+                alert('Could not download graph: ' + (err.message || 'network error'));
             }
         }
 

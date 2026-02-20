@@ -213,7 +213,7 @@ def _build_graph_only_html(graph_state_json: str) -> str:
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>PhilosophAI Graph</title>
+<title>PHILO-001 Graph</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet"/>
