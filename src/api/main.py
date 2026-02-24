@@ -20,11 +20,12 @@ def _env_mode() -> Literal["development", "production"]:
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
+from .rate_limit import get_client_key, get_retry_after_seconds, record_request
 from .ws import (
     router as ws_router,
     set_agent,
@@ -153,6 +154,18 @@ def get_agent_for_conversation(conversation_id: str):
         _conversation_store[conversation_id] = (agent, now)
         _conversation_locks[conversation_id] = lock
         return agent, lock
+
+
+def _rate_limit_dep(request: Request):
+    """Dependency: raise 429 if client is over rate limit."""
+    key = get_client_key(request)
+    if not record_request(key):
+        retry = get_retry_after_seconds(key)
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Try again later.",
+            headers={"Retry-After": str(retry)} if retry else {},
+        )
 
 
 def _create_philosopher_agent():
@@ -298,7 +311,14 @@ def create_app() -> FastAPI:
         allowed_origins_env = "https://butlerian.xyz,https://www.butlerian.xyz"
     allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
     print(f"🔒 CORS ({mode}): {allowed_origins}")
-    
+
+    _rlimit = int(os.environ.get("PHILOSOPH_RATE_LIMIT_REQUESTS", "2"))
+    _rwin = int(os.environ.get("PHILOSOPH_RATE_LIMIT_WINDOW_SECONDS", "60"))
+    if _rlimit <= 0:
+        print("⏱️ Rate limit: disabled")
+    else:
+        print(f"⏱️ Rate limit: {_rlimit} requests / {_rwin}s per client")
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
@@ -317,7 +337,7 @@ def create_app() -> FastAPI:
 
     # Query endpoint (non-streaming)
     @app.post("/api/query", response_model=QueryResponse)
-    async def query(request: QueryRequest):
+    async def query(request: QueryRequest, _: None = Depends(_rate_limit_dep)):
         """Execute a GraphRAG query."""
         from ..agents import Scope
 
@@ -346,7 +366,7 @@ def create_app() -> FastAPI:
 
     # Agentic query endpoint (PhilosopherAgent with sequential thinking)
     @app.post("/api/agent/query", response_model=AgentQueryResponse)
-    async def agent_query(request: AgentQueryRequest):
+    async def agent_query(request: AgentQueryRequest, _: None = Depends(_rate_limit_dep)):
         """
         Execute an agentic query with sequential thinking.
 
@@ -389,7 +409,7 @@ def create_app() -> FastAPI:
 
     # Agentic greeting (LLM-generated); uses fresh agent so concurrent greetings don't share state
     @app.post("/api/agent/reset")
-    async def agent_reset(body: AgentResetRequest | None = Body(None)):
+    async def agent_reset(body: AgentResetRequest | None = Body(None), _: None = Depends(_rate_limit_dep)):
         """Reset conversation state. If body.conversation_id is set, reset that conversation's agent; else reset shared agent (legacy)."""
         if not state.ready or not state.philosopher_agent:
             raise HTTPException(status_code=503, detail="Agent not initialized")
@@ -420,7 +440,7 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/api/agent/greeting")
-    async def agent_greeting():
+    async def agent_greeting(_: None = Depends(_rate_limit_dep)):
         if not state.ready:
             raise HTTPException(status_code=503, detail="Agent not initialized")
 

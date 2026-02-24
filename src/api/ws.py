@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Callable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from .rate_limit import get_client_key_ws, record_request
+
 if TYPE_CHECKING:
     from ..agents import MultiHopAgent, PhilosopherAgent
 
@@ -197,6 +199,14 @@ async def websocket_agent(websocket: WebSocket):
                 await manager.send_json(websocket, {
                     "type": "error",
                     "message": "No question provided",
+                })
+                continue
+
+            key = get_client_key_ws(websocket)
+            if not record_request(key):
+                await manager.send_json(websocket, {
+                    "type": "error",
+                    "message": "Rate limit exceeded. Try again later.",
                 })
                 continue
 

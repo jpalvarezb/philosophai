@@ -473,7 +473,7 @@ OUTPUT
 - Inline citations only; no bullet lists of sources and no trailing source sections.
 
 STYLE
-- Scholarly, precise, high information density. Present multiple viewpoints when relevant. State uncertainty.
+- Scholarly, precise, to the point. Present multiple viewpoints when relevant. State uncertainty.
 - Be concise but thorough enough to answer rigorously; avoid fluff.
 """
     + "\n\n"
@@ -496,7 +496,7 @@ class PhilosopherAgent:
         agent_tools: "AgentTools",
         citation_builder: "CitationBuilder | None" = None,
         llm_client: OpenAI | None = None,
-        llm_model: str = "gpt-4o",
+        llm_model: str = "gpt-5.2",
         verbose: bool = True,
     ):
         self.agent_tools = agent_tools
