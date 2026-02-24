@@ -297,7 +297,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="PHILO-001",
         description="Knowledge Graph RAG with Community Routing",
-        version="0.7.1",
+        version="0.8.0",
         lifespan=lifespan,
     )
 
@@ -312,8 +312,8 @@ def create_app() -> FastAPI:
     allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
     print(f"🔒 CORS ({mode}): {allowed_origins}")
 
-    _rlimit = int(os.environ.get("PHILOSOPH_RATE_LIMIT_REQUESTS", "2"))
-    _rwin = int(os.environ.get("PHILOSOPH_RATE_LIMIT_WINDOW_SECONDS", "60"))
+    _rlimit = int(os.environ.get("PHILOSOPH_RATE_LIMIT_REQUESTS"))
+    _rwin = int(os.environ.get("PHILOSOPH_RATE_LIMIT_WINDOW_SECONDS"))
     if _rlimit <= 0:
         print("⏱️ Rate limit: disabled")
     else:

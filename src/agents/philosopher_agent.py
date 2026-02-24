@@ -1696,7 +1696,21 @@ class PhilosopherAgent:
         LLM check to decide if current question is a follow-up.
         Returns "in" (follow-up) or "out" (new topic).
         """
-        if not self.llm_client or not recent_qas:
+        if not recent_qas:
+            return "out"
+        # Heuristic: clear anaphora to prior answer (e.g. "this partnership", "that connection") → follow-up
+        q_lower = (question or "").strip().lower()
+        anaphora_patterns = (
+            "this partnership", "that partnership", "the partnership",
+            "this connection", "that connection", "the connection",
+            "this relationship", "that relationship",
+            "this idea", "that idea", "the above",
+            "this concept", "that concept", "more aware of this",
+            "that discussion", "this discussion",
+        )
+        if any(p in q_lower for p in anaphora_patterns):
+            return "in"
+        if not self.llm_client:
             return "out"
         try:
             context = "\n\n".join(recent_qas[-5:])
@@ -1707,8 +1721,10 @@ class PhilosopherAgent:
                         "role": "system",
                         "content": (
                             "Decide if the new user question is a follow-up to the prior Q&A context. "
-                            "Reply with exactly one token: IN (follow-up) or OUT (new topic). "
-                            "Be strict; only IN if the new question depends on or continues the prior discussion."
+                            "Reply with exactly one word: IN or OUT. "
+                            "IN = follow-up: the question refers to, builds on, or asks 'how can I' about what was just discussed "
+                            "(e.g. 'how can I be more aware of this partnership?', 'what about that?', 'tell me more'). "
+                            "OUT = clearly a new, unrelated topic. When in doubt, prefer IN if the question could refer to the prior answer."
                         ),
                     },
                     {"role": "user", "content": f"Previous QAs:\n{context}\n\nNew question:\n{question}"},

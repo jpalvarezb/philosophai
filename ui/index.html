@@ -947,6 +947,8 @@
         let citationAnswerSeq = 0;
         let citationHoverSeq = 0;
         let chatboxRect = null;
+        /** Persisted so server reuses same agent; enables follow-up detection and session_continued (graph state preserved). Cleared on reset. */
+        let currentConversationId = null;
 
         // Export state: in-memory conversation for Save Transcript / Export Field (no server persistence)
         const exportMessages = [];
@@ -1540,12 +1542,14 @@
             exportGraphTrace.used_edges = [];
             exportGraphTrace.cited_node_ids = [];
             exportNodeLabels.clear();
+            const cidToReset = currentConversationId;
+            currentConversationId = null;
 
             resetGraphToBase();
             restoreInitialUiState({ duration: 600 });
 
-            // Call backend reset
-            fetch(`${API_BASE}/api/agent/reset`, { method: 'POST' })
+            // Call backend reset (with conversation_id if we had one, so that conversation's agent is cleared)
+            fetch(`${API_BASE}/api/agent/reset`, { method: 'POST', ...(cidToReset ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conversation_id: cidToReset }) } : {}) })
                 .then(() => bootSequence())
                 .catch(err => {
                     console.error('Reset failed', err);
@@ -2986,7 +2990,8 @@
             }
 
             ws.addEventListener('open', () => {
-                ws.send(JSON.stringify({ question, max_iterations: 25 }));
+                if (!currentConversationId) currentConversationId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('conv-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+                ws.send(JSON.stringify({ question, max_iterations: 25, conversation_id: currentConversationId }));
             });
 
             ws.addEventListener('message', (event) => {
