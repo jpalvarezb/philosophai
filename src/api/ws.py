@@ -16,6 +16,7 @@ router = APIRouter()
 _agent: "MultiHopAgent | None" = None
 _philosopher_agent: "PhilosopherAgent | None" = None
 _philosopher_agent_factory: "Callable[[], PhilosopherAgent] | None" = None
+_get_agent_for_conversation: "Callable[[str], tuple[PhilosopherAgent, object]] | None" = None
 
 
 def set_agent(agent: "MultiHopAgent"):
@@ -34,6 +35,12 @@ def set_philosopher_agent_factory(factory: "Callable[[], PhilosopherAgent]"):
     """Set a factory that creates a new PhilosopherAgent per query (for concurrent users)."""
     global _philosopher_agent_factory
     _philosopher_agent_factory = factory
+
+
+def set_get_agent_for_conversation(factory: "Callable[[str], tuple[PhilosopherAgent, object]]"):
+    """Set the conversation-scoped agent getter (Option B: server-side sessions keyed by conversation_id)."""
+    global _get_agent_for_conversation
+    _get_agent_for_conversation = factory
 
 
 class ConnectionManager:
@@ -172,8 +179,9 @@ async def websocket_query(websocket: WebSocket):
 async def websocket_agent(websocket: WebSocket):
     """
     WebSocket endpoint for streaming agentic query execution.
-    
-    Client sends: {"question": "...", "max_iterations": 25}
+
+    Client sends: {"question": "...", "max_iterations": 25, "conversation_id": "..." (optional)}
+    When conversation_id is set, reuses the same server-side agent for that conversation (last 5 Q/As).
     Server streams: {"type": "status|thought|routing|traversal|complete|error", ...}
     """
     await manager.connect(websocket)
@@ -183,6 +191,7 @@ async def websocket_agent(websocket: WebSocket):
             request = json.loads(data)
             question = request.get("question", "")
             max_iterations = request.get("max_iterations", 25)
+            conversation_id = request.get("conversation_id")
 
             if not question:
                 await manager.send_json(websocket, {
@@ -191,7 +200,12 @@ async def websocket_agent(websocket: WebSocket):
                 })
                 continue
 
-            agent = (_philosopher_agent_factory() if _philosopher_agent_factory else _philosopher_agent)
+            if conversation_id and _get_agent_for_conversation:
+                agent, conv_lock = _get_agent_for_conversation(conversation_id)
+            else:
+                agent = (_philosopher_agent_factory() if _philosopher_agent_factory else _philosopher_agent)
+                conv_lock = None
+
             if not agent:
                 await manager.send_json(websocket, {
                     "type": "error",
@@ -220,11 +234,19 @@ async def websocket_agent(websocket: WebSocket):
 
             def run_query():
                 try:
-                    agent.query_streaming(
-                        question=question,
-                        on_event=emit_event,
-                        max_iterations=max_iterations,
-                    )
+                    if conv_lock is not None:
+                        with conv_lock:
+                            agent.query_streaming(
+                                question=question,
+                                on_event=emit_event,
+                                max_iterations=max_iterations,
+                            )
+                    else:
+                        agent.query_streaming(
+                            question=question,
+                            on_event=emit_event,
+                            max_iterations=max_iterations,
+                        )
                 except Exception as e:
                     emit_event({"type": "error", "message": str(e)})
                 finally:

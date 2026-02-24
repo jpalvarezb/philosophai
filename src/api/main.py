@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -19,14 +20,18 @@ def _env_mode() -> Literal["development", "production"]:
 from pathlib import Path
 from typing import Any
 
-import uuid
-
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
-from .ws import router as ws_router, set_agent, set_philosopher_agent, set_philosopher_agent_factory
+from .ws import (
+    router as ws_router,
+    set_agent,
+    set_get_agent_for_conversation,
+    set_philosopher_agent,
+    set_philosopher_agent_factory,
+)
 
 
 # --- Pydantic Models ---
@@ -59,6 +64,7 @@ class AgentQueryRequest(BaseModel):
     max_iterations: int = 25
     verbose: bool = False
     session_id: str | None = None  # Optional; echoed in response for ordering/tracking
+    conversation_id: str | None = None  # Optional; when set, reuses server-side agent (last 5 Q/As) for this conversation
 
 
 class AgentQueryResponse(BaseModel):
@@ -74,6 +80,10 @@ class AgentQueryResponse(BaseModel):
     session_continued: bool = False
     session_id: str | None = None  # Echo of request session_id, if provided
     sequence_id: int = 0  # Monotonic id per response; client can use to order or detect out-of-order
+
+
+class AgentResetRequest(BaseModel):
+    conversation_id: str | None = None  # If set, reset only this conversation's agent; else reset shared agent (legacy)
 
 
 # --- Application State ---
@@ -100,6 +110,49 @@ _shared_philosopher_agent_lock = threading.Lock()
 # Monotonic sequence for agent query responses (ordering / out-of-order detection)
 _query_sequence_lock = threading.Lock()
 _query_sequence_counter = 0
+
+# Option B: server-side sessions keyed by conversation_id
+_CONVERSATION_TTL_SECONDS = int(os.environ.get("PHILOSOPH_CONVERSATION_TTL", "1800"))  # 30 min
+_CONVERSATION_MAX_ENTRIES = int(os.environ.get("PHILOSOPH_CONVERSATION_MAX", "200"))
+_conversation_store: dict[str, tuple[Any, float]] = {}  # conversation_id -> (agent, last_used_ts)
+_conversation_locks: dict[str, threading.Lock] = {}
+_store_lock = threading.Lock()
+
+
+def _evict_conversations():
+    """Remove expired entries and trim to max size. Caller must hold _store_lock."""
+    now = time.monotonic()
+    to_remove = [
+        cid for cid, (_, last) in _conversation_store.items()
+        if now - last > _CONVERSATION_TTL_SECONDS
+    ]
+    if len(_conversation_store) > _CONVERSATION_MAX_ENTRIES:
+        by_age = sorted(_conversation_store.items(), key=lambda x: x[1][1])
+        n = len(_conversation_store) - _CONVERSATION_MAX_ENTRIES
+        for cid, _ in by_age[:n]:
+            to_remove.append(cid)
+    for cid in to_remove:
+        _conversation_store.pop(cid, None)
+        _conversation_locks.pop(cid, None)
+
+
+def get_agent_for_conversation(conversation_id: str):
+    """
+    Return (agent, lock) for the given conversation_id.
+    Caller must hold the returned lock while using the agent (e.g. running a query).
+    """
+    with _store_lock:
+        _evict_conversations()
+        now = time.monotonic()
+        if conversation_id in _conversation_store:
+            agent, _ = _conversation_store[conversation_id]
+            _conversation_store[conversation_id] = (agent, now)
+            return agent, _conversation_locks[conversation_id]
+        agent = _create_philosopher_agent()
+        lock = threading.Lock()
+        _conversation_store[conversation_id] = (agent, now)
+        _conversation_locks[conversation_id] = lock
+        return agent, lock
 
 
 def _create_philosopher_agent():
@@ -211,6 +264,7 @@ def init_components():
     set_agent(state.agent)
     set_philosopher_agent(state.philosopher_agent)
     set_philosopher_agent_factory(_create_philosopher_agent)
+    set_get_agent_for_conversation(get_agent_for_conversation)
 
     state.ready = True
     print("✅ PhilosophAI ready!")
@@ -296,10 +350,8 @@ def create_app() -> FastAPI:
         """
         Execute an agentic query with sequential thinking.
 
-        Runs in a thread pool so multiple users can run queries concurrently;
-        each request gets an isolated agent instance. Ordering is not guaranteed:
-        responses may complete out of request order; use sequence_id to order or
-        detect out-of-order delivery.
+        If conversation_id is set, reuses the same server-side agent for that conversation
+        (enables last-5-Q/A follow-up context). Otherwise creates a fresh agent per request.
         """
         if not state.ready:
             raise HTTPException(status_code=503, detail="Agent not initialized")
@@ -309,12 +361,22 @@ def create_app() -> FastAPI:
             next_seq = _query_sequence_counter
             _query_sequence_counter += 1
 
-        def run_query():
-            agent = _create_philosopher_agent()
-            return agent.query(
-                question=request.question,
-                max_iterations=request.max_iterations,
-            )
+        if request.conversation_id:
+            agent, conv_lock = get_agent_for_conversation(request.conversation_id)
+
+            def run_query():
+                with conv_lock:
+                    return agent.query(
+                        question=request.question,
+                        max_iterations=request.max_iterations,
+                    )
+        else:
+            def run_query():
+                agent = _create_philosopher_agent()
+                return agent.query(
+                    question=request.question,
+                    max_iterations=request.max_iterations,
+                )
 
         try:
             loop = asyncio.get_event_loop()
@@ -327,20 +389,35 @@ def create_app() -> FastAPI:
 
     # Agentic greeting (LLM-generated); uses fresh agent so concurrent greetings don't share state
     @app.post("/api/agent/reset")
-    async def agent_reset():
+    async def agent_reset(body: AgentResetRequest | None = Body(None)):
+        """Reset conversation state. If body.conversation_id is set, reset that conversation's agent; else reset shared agent (legacy)."""
         if not state.ready or not state.philosopher_agent:
             raise HTTPException(status_code=503, detail="Agent not initialized")
 
-        def do_reset():
-            with _shared_philosopher_agent_lock:
-                state.philosopher_agent.reset_session()
+        if body and body.conversation_id:
+            agent, conv_lock = get_agent_for_conversation(body.conversation_id)
 
-        try:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, do_reset)
-            return {"status": "ok", "message": "Session reset"}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            def do_reset():
+                with conv_lock:
+                    agent.reset_session()
+
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, do_reset)
+                return {"status": "ok", "message": "Conversation reset", "conversation_id": body.conversation_id}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+        else:
+            def do_reset():
+                with _shared_philosopher_agent_lock:
+                    state.philosopher_agent.reset_session()
+
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, do_reset)
+                return {"status": "ok", "message": "Session reset"}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/api/agent/greeting")
     async def agent_greeting():
