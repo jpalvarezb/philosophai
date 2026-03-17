@@ -78,26 +78,15 @@ class EntityCanonicalizer:
         self.embedding_model = embedding_model or self.config.embedding_model
         self.judge_model = judge_model or self.config.judge_model
         self._nlp = None
-        self._ner_nlp = None
 
     @property
     def nlp(self):
-        """Lazy load spaCy model."""
+        """Lazy load spaCy model with NER enabled."""
         if self._nlp is None:
             import spacy
             print("🔧 Loading spaCy model...")
-            self._nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+            self._nlp = spacy.load("en_core_web_sm", disable=["parser"])
         return self._nlp
-
-    @property
-    def ner_nlp(self):
-        """Lazy load spaCy pipeline with NER enabled."""
-        if self._ner_nlp is None:
-            import spacy
-
-            print("🔧 Loading spaCy NER model...")
-            self._ner_nlp = spacy.load("en_core_web_sm", disable=["parser"])
-        return self._ner_nlp
 
     def get_embeddings_batch(self, texts: list[str], batch_size: int = 500) -> np.ndarray:
         """Get embeddings for a list of texts."""
@@ -604,14 +593,15 @@ class EntityCanonicalizer:
         from tqdm import tqdm
         for i in tqdm(range(0, len(entities), batch_size), desc="Lemmatizing"):
             batch = entities[i:i+batch_size]
-            docs = list(self.nlp.pipe([e.lower() if e else "" for e in batch]))
-            ner_docs = list(self.ner_nlp.pipe([e if e else "" for e in batch]))
+            # Process once: get lemmas from lowercased text, NER from original casing
+            docs_lower = list(self.nlp.pipe([e.lower() if e else "" for e in batch]))
+            docs_ner = list(self.nlp.pipe([e if e else "" for e in batch]))
             
-            for entity, doc, ner_doc in zip(batch, docs, ner_docs):
+            for entity, doc_lower, doc_ner in zip(batch, docs_lower, docs_ner):
                 if entity:
-                    lemmas = " ".join([token.lemma_ for token in doc])
+                    lemmas = " ".join([token.lemma_ for token in doc_lower])
                     entity_to_canon[entity] = lemmas
-                    ner_label = self._extract_full_span_entity_label(ner_doc)
+                    ner_label = self._extract_full_span_entity_label(doc_ner)
                     entity_ner_rows.append(
                         {
                             "entity_orig": entity,
