@@ -904,35 +904,44 @@ class EntityCanonicalizer:
         sim_matrix = self._compute_similarity_matrix(embeddings)
 
         named_entity_flags = self._load_entity_named_flags()
-        blocked_pairs: set[tuple[str, str]] = set()
-        ambiguous_pairs: list[dict[str, str | float | int | bool]] = []
-        for left_idx in range(len(entities)):
-            left = entities[left_idx]
-            left_named = named_entity_flags.get(left, False)
-            for right_idx in range(left_idx + 1, len(entities)):
-                right = entities[right_idx]
-                similarity = float(sim_matrix[left_idx, right_idx])
-                both_named = left_named and named_entity_flags.get(right, False)
-                effective_threshold = similarity_threshold + (
-                    named_entity_threshold_boost if both_named else 0.0
-                )
-                soft_lower = max(0.0, effective_threshold - ambiguous_margin)
-                pair_key = self._pair_key(left, right)
-
-                if both_named and similarity < effective_threshold:
-                    blocked_pairs.add(pair_key)
-
-                if soft_lower <= similarity < effective_threshold:
-                    ambiguous_pairs.append(
-                        {
-                            "left": left,
-                            "right": right,
-                            "similarity": round(similarity, 4),
-                            "left_frequency": entity_frequencies.get(left, 0),
-                            "right_frequency": entity_frequencies.get(right, 0),
-                            "both_named_entities": both_named,
-                        }
-                    )
+        
+        # Vectorized approach: compute all pairwise conditions at once
+        n = len(entities)
+        named_entity_array = np.array([named_entity_flags.get(e, False) for e in entities], dtype=bool)
+        
+        # Get upper triangular indices (excluding diagonal)
+        left_indices, right_indices = np.triu_indices(n, k=1)
+        
+        # Compute both_named for all pairs
+        both_named_array = named_entity_array[left_indices] & named_entity_array[right_indices]
+        
+        # Get similarities for all pairs
+        similarities = sim_matrix[left_indices, right_indices]
+        
+        # Compute effective thresholds (vectorized)
+        effective_thresholds = similarity_threshold + (named_entity_threshold_boost * both_named_array.astype(float))
+        soft_lowers = np.maximum(0.0, effective_thresholds - ambiguous_margin)
+        
+        # Find blocked pairs (both named AND similarity < threshold)
+        blocked_mask = both_named_array & (similarities < effective_thresholds)
+        blocked_pairs: set[tuple[str, str]] = {
+            self._pair_key(entities[left_indices[i]], entities[right_indices[i]])
+            for i in np.where(blocked_mask)[0]
+        }
+        
+        # Find ambiguous pairs (similarity in [soft_lower, effective_threshold))
+        ambiguous_mask = (similarities >= soft_lowers) & (similarities < effective_thresholds)
+        ambiguous_pairs: list[dict[str, str | float | int | bool]] = [
+            {
+                "left": entities[left_indices[i]],
+                "right": entities[right_indices[i]],
+                "similarity": round(float(similarities[i]), 4),
+                "left_frequency": entity_frequencies.get(entities[left_indices[i]], 0),
+                "right_frequency": entity_frequencies.get(entities[right_indices[i]], 0),
+                "both_named_entities": bool(both_named_array[i]),
+            }
+            for i in np.where(ambiguous_mask)[0]
+        ]
 
         if len(ambiguous_pairs) > max_samejudge_pairs:
             ambiguous_pairs.sort(
