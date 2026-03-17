@@ -20,6 +20,9 @@ dependencies = [
     "websockets>=12.0",
     "pydantic>=2.0.0",
     "reportlab>=4.0.0",
+    "ebooklib>=0.18",
+    "pymupdf>=1.24.0",
+    "rapidfuzz>=3.9.0",
 ]
 
 [project.optional-dependencies]

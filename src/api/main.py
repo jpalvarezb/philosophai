@@ -307,8 +307,6 @@ def create_app() -> FastAPI:
         allowed_origins_env = os.environ.get("CORS_ORIGINS")
     elif mode == "development":
         allowed_origins_env = "http://localhost:8000,http://localhost:5713,http://localhost:3000,http://127.0.0.1:8000,http://127.0.0.1:5713,http://127.0.0.1:3000"
-    else:
-        allowed_origins_env = "https://butlerian.xyz,https://www.butlerian.xyz"
     allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
     print(f"🔒 CORS ({mode}): {allowed_origins}")
 

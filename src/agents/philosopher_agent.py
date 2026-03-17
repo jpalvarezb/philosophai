@@ -385,7 +385,7 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
     },
 ]
 
-CONSTITUTION = """CONSTITUTIONAL PRINCIPLES (Anthropic-style)
+CONSTITUTION = """CONSTITUTIONAL PRINCIPLES
 C1: Be helpful, honest, and harmless.
 C2: Ground claims in cited evidence; avoid fabrication.
 C3: If evidence is insufficient, say so and request more info.

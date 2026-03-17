@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .config import IngestConfig
+
 if TYPE_CHECKING:
     from openai import OpenAI
     from ..storage import DuckDBStorage
@@ -16,14 +18,16 @@ class ChunkEmbedder:
         storage: "DuckDBStorage",
         llm_client: "OpenAI",
         embedding_model: str = "text-embedding-3-small",
+        config: IngestConfig | None = None,
     ):
         self.storage = storage
         self.llm_client = llm_client
-        self.embedding_model = embedding_model
+        self.config = config or IngestConfig()
+        self.embedding_model = embedding_model or self.config.embedding_model
 
     def embed_chunks(
         self,
-        batch_size: int = 100,
+        batch_size: int | None = None,
         skip_existing: bool = True,
     ) -> dict:
         """
@@ -37,6 +41,7 @@ class ChunkEmbedder:
             Dict with statistics
         """
         con = self.storage.con
+        batch_size = batch_size or self.config.embedding_batch_size
         
         # Ensure table exists
         con.execute("""
@@ -111,7 +116,7 @@ class ChunkEmbedder:
     def embed_entities(
         self,
         source_table: str = "entity_canon_map",
-        batch_size: int = 100,
+        batch_size: int | None = None,
     ) -> dict:
         """
         Embed canonical entities (optional, for entity-level search).
@@ -119,6 +124,7 @@ class ChunkEmbedder:
         Creates entity_embeddings table.
         """
         con = self.storage.con
+        batch_size = batch_size or self.config.embedding_batch_size
         
         # Create table
         con.execute("""

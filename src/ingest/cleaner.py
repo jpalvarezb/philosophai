@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .config import IngestConfig
+
 if TYPE_CHECKING:
     from ..storage import DuckDBStorage
 # Keep only alphabetical tokens and reasonable lengths
@@ -26,7 +28,7 @@ ALPHA_FILTER_SQL = """
 
 
 # Filter patterns for Project Gutenberg and other metadata noise
-NOISE_FILTER_SQL = """
+LEGACY_NOISE_FILTER_SQL = """
     -- Project Gutenberg (all variants)
     LOWER(subject_norm) LIKE '%gutenberg%' 
     OR LOWER(object_norm) LIKE '%gutenberg%'
@@ -199,8 +201,55 @@ NOISE_FILTER_SQL = """
 class TripleCleaner:
     """Clean extracted triples by removing noise and metadata."""
 
-    def __init__(self, storage: "DuckDBStorage"):
+    def __init__(self, storage: "DuckDBStorage", config: IngestConfig | None = None):
         self.storage = storage
+        self.config = config or IngestConfig()
+
+    @staticmethod
+    def _escape_like(pattern: str) -> str:
+        return pattern.replace("'", "''")
+
+    def _build_noise_filter(self) -> str:
+        """Build the active noise SQL from dynamic rules or fallback to legacy SQL."""
+        entity_patterns = list(self.config.noise_entity_patterns)
+        predicate_patterns = list(self.config.noise_predicate_patterns)
+        if self.config.cleaning_rules:
+            entity_patterns.extend(self.config.cleaning_rules.entity_patterns)
+            predicate_patterns.extend(self.config.cleaning_rules.predicate_patterns)
+
+        clauses: list[str] = []
+        for pattern in sorted(set(entity_patterns)):
+            escaped = self._escape_like(pattern.lower())
+            clauses.append(f"LOWER(subject_norm) LIKE '{escaped}'")
+            clauses.append(f"LOWER(object_norm) LIKE '{escaped}'")
+
+        for pattern in sorted(set(predicate_patterns)):
+            escaped = self._escape_like(pattern.lower())
+            clauses.append(f"LOWER(predicate_norm) LIKE '{escaped}'")
+
+        provenance_failed = []
+        if self.config.cleaning_rules:
+            provenance_failed = self.config.cleaning_rules.provenance_failed_entities
+        for entity in sorted(set(provenance_failed)):
+            escaped = self._escape_like(entity.lower())
+            clauses.append(f"LOWER(subject_norm) = '{escaped}'")
+            clauses.append(f"LOWER(object_norm) = '{escaped}'")
+
+        type_rules = self.config.cleaning_rules.type_rules if self.config.cleaning_rules else {}
+        for entity_type, patterns in type_rules.items():
+            escaped_type = self._escape_like(entity_type)
+            for pattern in patterns:
+                escaped_pattern = self._escape_like(pattern.lower())
+                clauses.append(
+                    f"(subject_type = '{escaped_type}' AND LOWER(subject_norm) LIKE '{escaped_pattern}')"
+                )
+                clauses.append(
+                    f"(object_type = '{escaped_type}' AND LOWER(object_norm) LIKE '{escaped_pattern}')"
+                )
+
+        if not clauses:
+            return LEGACY_NOISE_FILTER_SQL
+        return "\n    OR ".join(clauses)
 
     def clean(
         self,
@@ -224,10 +273,12 @@ class TripleCleaner:
         # Count before
         total = con.execute(f"SELECT COUNT(*) FROM {source_table}").fetchone()[0]
         print(f"📊 Total triples in {source_table}: {total:,}")
-        
+
+        noise_filter_sql = self._build_noise_filter()
+
         # Count noise
         noise_count = con.execute(
-            f"SELECT COUNT(*) FROM {source_table} WHERE {NOISE_FILTER_SQL}"
+            f"SELECT COUNT(*) FROM {source_table} WHERE {noise_filter_sql}"
         ).fetchone()[0]
         print(f"🗑️  Noise triples: {noise_count:,} ({100*noise_count/total:.1f}%)")
         
@@ -237,7 +288,7 @@ class TripleCleaner:
             sample = con.execute(f"""
                 SELECT subject_norm, predicate_norm, object_norm 
                 FROM {source_table} 
-                WHERE {NOISE_FILTER_SQL}
+                WHERE {noise_filter_sql}
                 LIMIT 10
             """).fetchdf()
             for _, row in sample.iterrows():
@@ -257,7 +308,7 @@ class TripleCleaner:
             CREATE TABLE {target_table} AS
             WITH filtered AS (
                 SELECT * FROM {source_table}
-                WHERE NOT ({NOISE_FILTER_SQL})
+                WHERE NOT ({noise_filter_sql})
                   AND ({ALPHA_FILTER_SQL})
             ),
             pred_support AS (
@@ -302,5 +353,4 @@ class TripleCleaner:
 
     def add_custom_filter(self, pattern: str):
         """Add a custom filter pattern (for corpus-specific noise)."""
-        global NOISE_FILTER_SQL
-        NOISE_FILTER_SQL = f"{NOISE_FILTER_SQL}\n    OR {pattern}"
+        self.config.noise_entity_patterns.append(pattern)
