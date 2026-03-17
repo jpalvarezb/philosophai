@@ -78,26 +78,15 @@ class EntityCanonicalizer:
         self.embedding_model = embedding_model or self.config.embedding_model
         self.judge_model = judge_model or self.config.judge_model
         self._nlp = None
-        self._ner_nlp = None
 
     @property
     def nlp(self):
-        """Lazy load spaCy model."""
+        """Lazy load spaCy model with NER enabled."""
         if self._nlp is None:
             import spacy
             print("🔧 Loading spaCy model...")
-            self._nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+            self._nlp = spacy.load("en_core_web_sm", disable=["parser"])
         return self._nlp
-
-    @property
-    def ner_nlp(self):
-        """Lazy load spaCy pipeline with NER enabled."""
-        if self._ner_nlp is None:
-            import spacy
-
-            print("🔧 Loading spaCy NER model...")
-            self._ner_nlp = spacy.load("en_core_web_sm", disable=["parser"])
-        return self._ner_nlp
 
     def get_embeddings_batch(self, texts: list[str], batch_size: int = 500) -> np.ndarray:
         """Get embeddings for a list of texts."""
@@ -604,14 +593,15 @@ class EntityCanonicalizer:
         from tqdm import tqdm
         for i in tqdm(range(0, len(entities), batch_size), desc="Lemmatizing"):
             batch = entities[i:i+batch_size]
-            docs = list(self.nlp.pipe([e.lower() if e else "" for e in batch]))
-            ner_docs = list(self.ner_nlp.pipe([e if e else "" for e in batch]))
+            # Process once: get lemmas from lowercased text, NER from original casing
+            docs_lower = list(self.nlp.pipe([e.lower() if e else "" for e in batch]))
+            docs_ner = list(self.nlp.pipe([e if e else "" for e in batch]))
             
-            for entity, doc, ner_doc in zip(batch, docs, ner_docs):
+            for entity, doc_lower, doc_ner in zip(batch, docs_lower, docs_ner):
                 if entity:
-                    lemmas = " ".join([token.lemma_ for token in doc])
+                    lemmas = " ".join([token.lemma_ for token in doc_lower])
                     entity_to_canon[entity] = lemmas
-                    ner_label = self._extract_full_span_entity_label(ner_doc)
+                    ner_label = self._extract_full_span_entity_label(doc_ner)
                     entity_ner_rows.append(
                         {
                             "entity_orig": entity,
@@ -904,35 +894,44 @@ class EntityCanonicalizer:
         sim_matrix = self._compute_similarity_matrix(embeddings)
 
         named_entity_flags = self._load_entity_named_flags()
-        blocked_pairs: set[tuple[str, str]] = set()
-        ambiguous_pairs: list[dict[str, str | float | int | bool]] = []
-        for left_idx in range(len(entities)):
-            left = entities[left_idx]
-            left_named = named_entity_flags.get(left, False)
-            for right_idx in range(left_idx + 1, len(entities)):
-                right = entities[right_idx]
-                similarity = float(sim_matrix[left_idx, right_idx])
-                both_named = left_named and named_entity_flags.get(right, False)
-                effective_threshold = similarity_threshold + (
-                    named_entity_threshold_boost if both_named else 0.0
-                )
-                soft_lower = max(0.0, effective_threshold - ambiguous_margin)
-                pair_key = self._pair_key(left, right)
-
-                if both_named and similarity < effective_threshold:
-                    blocked_pairs.add(pair_key)
-
-                if soft_lower <= similarity < effective_threshold:
-                    ambiguous_pairs.append(
-                        {
-                            "left": left,
-                            "right": right,
-                            "similarity": round(similarity, 4),
-                            "left_frequency": entity_frequencies.get(left, 0),
-                            "right_frequency": entity_frequencies.get(right, 0),
-                            "both_named_entities": both_named,
-                        }
-                    )
+        
+        # Vectorized approach: compute all pairwise conditions at once
+        n = len(entities)
+        named_entity_array = np.array([named_entity_flags.get(e, False) for e in entities], dtype=bool)
+        
+        # Get upper triangular indices (excluding diagonal)
+        left_indices, right_indices = np.triu_indices(n, k=1)
+        
+        # Compute both_named for all pairs
+        both_named_array = named_entity_array[left_indices] & named_entity_array[right_indices]
+        
+        # Get similarities for all pairs
+        similarities = sim_matrix[left_indices, right_indices]
+        
+        # Compute effective thresholds (vectorized)
+        effective_thresholds = similarity_threshold + (named_entity_threshold_boost * both_named_array.astype(float))
+        soft_lowers = np.maximum(0.0, effective_thresholds - ambiguous_margin)
+        
+        # Find blocked pairs (both named AND similarity < threshold)
+        blocked_mask = both_named_array & (similarities < effective_thresholds)
+        blocked_pairs: set[tuple[str, str]] = {
+            self._pair_key(entities[left_indices[i]], entities[right_indices[i]])
+            for i in np.where(blocked_mask)[0]
+        }
+        
+        # Find ambiguous pairs (similarity in [soft_lower, effective_threshold))
+        ambiguous_mask = (similarities >= soft_lowers) & (similarities < effective_thresholds)
+        ambiguous_pairs: list[dict[str, str | float | int | bool]] = [
+            {
+                "left": entities[left_indices[i]],
+                "right": entities[right_indices[i]],
+                "similarity": round(float(similarities[i]), 4),
+                "left_frequency": entity_frequencies.get(entities[left_indices[i]], 0),
+                "right_frequency": entity_frequencies.get(entities[right_indices[i]], 0),
+                "both_named_entities": bool(both_named_array[i]),
+            }
+            for i in np.where(ambiguous_mask)[0]
+        ]
 
         if len(ambiguous_pairs) > max_samejudge_pairs:
             ambiguous_pairs.sort(

@@ -664,6 +664,27 @@ class TripleExtractor:
                         next_triple_id += 1
 
                 decisions = self.evaluate_candidates(candidate_triples)
+                
+                # Retry logic: collect triples with missing decisions and retry once
+                missing_decision_candidates = [
+                    c for c in candidate_triples if c.triple_id not in decisions
+                ]
+                if missing_decision_candidates:
+                    logger.info(
+                        "Judge returned no decision for %d/%d triples, retrying once...",
+                        len(missing_decision_candidates),
+                        len(candidate_triples),
+                    )
+                    retry_decisions = self.evaluate_candidates(missing_decision_candidates)
+                    decisions.update(retry_decisions)
+                    still_missing = len([c for c in missing_decision_candidates if c.triple_id not in retry_decisions])
+                    if still_missing > 0:
+                        logger.warning(
+                            "After retry, %d/%d triples still have no decision (rejecting)",
+                            still_missing,
+                            len(missing_decision_candidates),
+                        )
+                
                 for candidate in candidate_triples:
                     decision = decisions.get(candidate.triple_id)
                     if decision is None:
