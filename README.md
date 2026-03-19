@@ -1,4 +1,4 @@
-# PhilosophAI (philosiphai)
+# PHILO 001 (philo)
 
 **Knowledge Graph RAG with community routing** — a GraphRAG-style system that builds a knowledge graph from philosophical texts, detects communities, and answers questions via an agent that traverses the graph and synthesizes answers with citations.
 
