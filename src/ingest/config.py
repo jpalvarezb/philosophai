@@ -1,11 +1,11 @@
 """Shared configuration objects for the ingestion pipeline."""
+
 from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
-
 
 DEFAULT_ENTITY_TYPES: dict[str, str] = {
     "Person": "Individual humans (Plato, Kant, Einstein)",
@@ -37,7 +37,9 @@ class CleaningRules:
             entity_patterns=list(data.get("entity_patterns", [])),
             predicate_patterns=list(data.get("predicate_patterns", [])),
             provenance_failed_entities=list(data.get("provenance_failed_entities", [])),
-            type_rules={k: list(v) for k, v in dict(data.get("type_rules", {})).items()},
+            type_rules={
+                k: list(v) for k, v in dict(data.get("type_rules", {})).items()
+            },
             explanations=dict(data.get("explanations", {})),
         )
 
@@ -60,7 +62,8 @@ class CorpusAuditReport:
             chunk_recommendations=dict(data.get("chunk_recommendations", {})),
             boilerplate_patterns=list(data.get("boilerplate_patterns", [])),
             discovered_subtypes={
-                key: list(values) for key, values in dict(data.get("discovered_subtypes", {})).items()
+                key: list(values)
+                for key, values in dict(data.get("discovered_subtypes", {})).items()
             },
             sample_findings=list(data.get("sample_findings", [])),
             raw_profiles=dict(data.get("raw_profiles", {})),
@@ -72,7 +75,9 @@ class IngestConfig:
     """Centralized ingestion settings shared across pipeline stages."""
 
     resources_dir: str = "data/resources"
-    supported_formats: list[str] = field(default_factory=lambda: [".txt", ".epub", ".pdf"])
+    supported_formats: list[str] = field(
+        default_factory=lambda: [".txt", ".epub", ".pdf"]
+    )
 
     chunk_max_chars: int = 1800
     chunk_overlap: int = 300
@@ -90,7 +95,9 @@ class IngestConfig:
     #: 1800) for local Ollama + big JSON payloads; None = library default (often too low for 5-chunk batches).
     extraction_http_timeout_seconds: float | None = None
 
-    entity_types: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ENTITY_TYPES))
+    entity_types: dict[str, str] = field(
+        default_factory=lambda: dict(DEFAULT_ENTITY_TYPES)
+    )
     entity_type_fallback: str = "Concept"
     discovered_subtypes: dict[str, list[str]] = field(default_factory=dict)
 
@@ -129,16 +136,29 @@ class IngestConfig:
             return cls()
 
         payload = dict(data)
-        payload["entity_types"] = dict(payload.get("entity_types", DEFAULT_ENTITY_TYPES))
+        payload["entity_types"] = dict(
+            payload.get("entity_types", DEFAULT_ENTITY_TYPES)
+        )
         payload["discovered_subtypes"] = {
-            key: list(values) for key, values in dict(payload.get("discovered_subtypes", {})).items()
+            key: list(values)
+            for key, values in dict(payload.get("discovered_subtypes", {})).items()
         }
-        payload["supported_formats"] = list(payload.get("supported_formats", [".txt", ".epub", ".pdf"]))
+        payload["supported_formats"] = list(
+            payload.get("supported_formats", [".txt", ".epub", ".pdf"])
+        )
         payload["boilerplate_patterns"] = list(payload.get("boilerplate_patterns", []))
-        payload["noise_entity_patterns"] = list(payload.get("noise_entity_patterns", []))
-        payload["noise_predicate_patterns"] = list(payload.get("noise_predicate_patterns", []))
-        payload["cleaning_rules"] = CleaningRules.from_dict(payload.get("cleaning_rules"))
-        payload["audit_report"] = CorpusAuditReport.from_dict(payload.get("audit_report"))
+        payload["noise_entity_patterns"] = list(
+            payload.get("noise_entity_patterns", [])
+        )
+        payload["noise_predicate_patterns"] = list(
+            payload.get("noise_predicate_patterns", [])
+        )
+        payload["cleaning_rules"] = CleaningRules.from_dict(
+            payload.get("cleaning_rules")
+        )
+        payload["audit_report"] = CorpusAuditReport.from_dict(
+            payload.get("audit_report")
+        )
         return cls(**payload)
 
     @classmethod

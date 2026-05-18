@@ -1,4 +1,5 @@
 """Data ingestion pipeline for PhilosophAI."""
+
 from .config import CleaningRules, CorpusAuditReport, IngestConfig
 from .cleaner import TripleCleaner
 from .canonicalizer import EntityCanonicalizer

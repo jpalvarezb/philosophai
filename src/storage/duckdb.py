@@ -1,4 +1,5 @@
 """DuckDB storage layer for PhilosophAI."""
+
 from __future__ import annotations
 
 import duckdb
@@ -57,7 +58,9 @@ class DuckDBStorage:
             chunk_ids,
         ).fetchall()
 
-    def get_chunk_provenance(self, chunk_ids: list[str]) -> dict[str, dict[str, str | None]]:
+    def get_chunk_provenance(
+        self, chunk_ids: list[str]
+    ) -> dict[str, dict[str, str | None]]:
         """Map chunk_id -> provenance fields from `files` (via chunks.text_id).
 
         This enables UI citation tooltips to show author/work/tradition metadata.
@@ -125,12 +128,12 @@ class DuckDBStorage:
     ) -> list[tuple[str, float]]:
         """
         Find top-k chunks by cosine similarity.
-        
+
         Args:
             query_embedding: Query vector
             limit: Max results to return
             text_ids: If provided, restrict to chunks from these text_ids (scope filter)
-        
+
         Returns:
             List of (chunk_id, score) tuples
         """
@@ -145,7 +148,9 @@ class DuckDBStorage:
                 ORDER BY score DESC
                 LIMIT ?
             """
-            return self.con.execute(sql, [query_embedding] + list(text_ids) + [limit]).fetchall()
+            return self.con.execute(
+                sql, [query_embedding] + list(text_ids) + [limit]
+            ).fetchall()
         else:
             # Unscoped search
             sql = """
@@ -194,10 +199,10 @@ class DuckDBStorage:
     def get_cluster_edges_df(self) -> "pd.DataFrame":
         """
         Get edges aggregated by (subject, object) pair for clustering.
-        
+
         Collapses all predicates between an entity pair into a single undirected edge.
         Weight = number of distinct chunks mentioning any relationship between the pair.
-        
+
         Returns DataFrame with columns:
             - u_id: lesser of the two entity IDs (for undirected consistency)
             - v_id: greater of the two entity IDs
@@ -224,10 +229,11 @@ class DuckDBStorage:
         """
         Get all predicates between an entity pair with their support counts.
         Used for community reports to show predicate distribution.
-        
+
         Returns list of (predicate, count) tuples sorted by count desc.
         """
-        result = self.con.execute("""
+        result = self.con.execute(
+            """
             SELECT predicate_canon_id, COUNT(DISTINCT chunk_id) as support
             FROM normalized_triples_clean_canon
             WHERE (
@@ -236,30 +242,30 @@ class DuckDBStorage:
             )
             GROUP BY 1
             ORDER BY support DESC
-        """, [u_id, v_id, v_id, u_id]).fetchall()
+        """,
+            [u_id, v_id, v_id, u_id],
+        ).fetchall()
         return result
 
     # -------------------------------------------------------------------------
     # Scoped Graph Queries (for author/tradition/domain filtering)
     # -------------------------------------------------------------------------
-    def get_scoped_edges(
-        self, chunk_ids: set[str]
-    ) -> set[tuple[str, str, str]]:
+    def get_scoped_edges(self, chunk_ids: set[str]) -> set[tuple[str, str, str]]:
         """
         Get all edges that have provenance in the given chunks.
-        
+
         An edge (subject, object, predicate) is "in scope" if at least one
         of its supporting chunks is in the scoped set.
-        
+
         Args:
             chunk_ids: Set of chunk IDs defining the scope
-        
+
         Returns:
             Set of (subject_canon_id, object_canon_id, predicate_canon_id) tuples
         """
         if not chunk_ids:
             return set()
-        
+
         placeholders = ",".join(["?"] * len(chunk_ids))
         sql = f"""
             SELECT DISTINCT 
@@ -277,22 +283,22 @@ class DuckDBStorage:
     def _get_scoped_entity_ids(self, chunk_ids: set[str]) -> set[str]:
         """
         Internal: Get all entity IDs that appear in edges supported by scoped chunks.
-        
+
         A node is "in scope" if it participates in at least one in-scope edge.
         This is used internally by derive_scoped_communities.
-        
+
         Note: For traversal, entity scope should be derived from scoped_edges as V(E),
         not queried separately.
-        
+
         Args:
             chunk_ids: Set of chunk IDs defining the scope
-        
+
         Returns:
             Set of entity IDs (both subjects and objects)
         """
         if not chunk_ids:
             return set()
-        
+
         placeholders = ",".join(["?"] * len(chunk_ids))
         sql = f"""
             SELECT DISTINCT subject_canon_id FROM normalized_triples_clean_canon 
@@ -314,34 +320,35 @@ class DuckDBStorage:
     ) -> list[tuple[int, int]]:
         """
         Derive relevant communities from scoped chunks.
-        
+
         Maps: scoped chunks -> entities in those chunks -> their global communities
         -> ranked by overlap count.
-        
+
         This replaces global community report routing for scoped queries.
-        
+
         Args:
             chunk_ids: Set of chunk IDs defining the scope
             node_to_community: Global node->community mapping
             top_n: Number of top communities to return
-        
+
         Returns:
             List of (community_id, entity_count) tuples, sorted by count desc
         """
         if not chunk_ids:
             return []
-        
+
         # Get entities from scoped chunks (internal helper)
         entity_ids = self._get_scoped_entity_ids(chunk_ids)
-        
+
         # Count entities per community
         from collections import Counter
+
         community_counts: Counter[int] = Counter()
         for entity_id in entity_ids:
             comm_id = node_to_community.get(entity_id)
             if comm_id is not None:
                 community_counts[comm_id] += 1
-        
+
         # Return top N communities by entity count
         return community_counts.most_common(top_n)
 
@@ -379,7 +386,15 @@ class DuckDBStorage:
             (community_id, level, node_ids, size, summary, summary_embedding, top_terms)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            [community_id, level, node_ids, size, summary, summary_embedding, top_terms],
+            [
+                community_id,
+                level,
+                node_ids,
+                size,
+                summary,
+                summary_embedding,
+                top_terms,
+            ],
         )
 
     def get_communities(self) -> pd.DataFrame:
@@ -432,7 +447,9 @@ class DuckDBStorage:
             SELECT community_id, UNNEST(node_ids), 1.0
             FROM communities
         """)
-        count = self.con.execute("SELECT COUNT(*) FROM community_membership").fetchone()[0]
+        count = self.con.execute(
+            "SELECT COUNT(*) FROM community_membership"
+        ).fetchone()[0]
         print(f"✅ Populated {count} community membership records")
 
     def get_nodes_in_communities(self, comm_ids: list[int]) -> list[str]:
@@ -505,7 +522,13 @@ class DuckDBStorage:
             (comm_id, report_text, report_embedding, cited_chunk_ids, entity_ids, created_at)
             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
-            [comm_id, report_text, report_embedding, cited_chunk_ids or [], entity_ids or []],
+            [
+                comm_id,
+                report_text,
+                report_embedding,
+                cited_chunk_ids or [],
+                entity_ids or [],
+            ],
         )
 
     def get_community_reports(self) -> pd.DataFrame:
@@ -515,6 +538,7 @@ class DuckDBStorage:
         except Exception:
             # Table doesn't exist yet
             import pandas as pd
+
             return pd.DataFrame()
 
     def vector_search_community_reports(
@@ -525,12 +549,12 @@ class DuckDBStorage:
     ) -> list[tuple[int, float, list[str]]]:
         """
         Find top-k community reports by embedding similarity.
-        
+
         Args:
             query_embedding: Query vector
             limit: Max results to return
             text_ids: If provided, filter cited_chunk_ids to only those from these texts
-        
+
         Returns:
             List of (comm_id, score, cited_chunk_ids) tuples.
             When text_ids is provided, cited_chunk_ids are pre-filtered at SQL level.
@@ -584,4 +608,3 @@ class DuckDBStorage:
         except Exception:
             # Table doesn't exist yet
             return []
-

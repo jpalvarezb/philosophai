@@ -1,17 +1,21 @@
 """Export artifact logic: transcript (TXT) with citation renumbering and HTML report."""
+
 from __future__ import annotations
 
 import re
 from typing import Any
 
 
-def _layout_graph_from_trace(graph_trace: dict[str, Any]) -> tuple[list[dict], list[dict]]:
+def _layout_graph_from_trace(
+    graph_trace: dict[str, Any],
+) -> tuple[list[dict], list[dict]]:
     """
     Build graph layout from graph_trace (used_nodes, used_edges) on the backend.
     Returns (nodes with x, y), (links with source, target, label) for drawing.
     Uses NetworkX layout: kamada_kawai for structure-based positions, fallback spring.
     """
     import networkx as nx
+
     used_nodes = graph_trace.get("used_nodes") or []
     used_edges = graph_trace.get("used_edges") or []
     if not used_nodes:
@@ -39,12 +43,14 @@ def _layout_graph_from_trace(graph_trace: dict[str, Any]) -> tuple[list[dict], l
         nid = str(n.get("id"))
         if nid in pos:
             x, y = pos[nid]
-            nodes_with_pos.append({
-                "id": nid,
-                "label": n.get("label") or nid,
-                "x": float(x),
-                "y": float(y),
-            })
+            nodes_with_pos.append(
+                {
+                    "id": nid,
+                    "label": n.get("label") or nid,
+                    "x": float(x),
+                    "y": float(y),
+                }
+            )
     edge_label_map: dict[tuple[str, str], str] = {}
     for e in used_edges:
         src = str(e.get("source") or e.get("from") or "")
@@ -68,7 +74,9 @@ def _layout_graph_from_trace(graph_trace: dict[str, Any]) -> tuple[list[dict], l
     return nodes_with_pos, links
 
 
-def citation_renumber(payload: dict[str, Any]) -> tuple[list[dict], dict[str, int], list[dict]]:
+def citation_renumber(
+    payload: dict[str, Any],
+) -> tuple[list[dict], dict[str, int], list[dict]]:
     """
     Deterministic citation renumbering across all PHILO messages.
     Returns: (messages_with_rewritten_content, key_to_index, evidence_entries_ordered).
@@ -115,7 +123,14 @@ def citation_renumber(payload: dict[str, Any]) -> tuple[list[dict], dict[str, in
                     continue
                 seen_refs.add(old_n)
                 # citation with index old_n (1-based)
-                c = next((c for c in citations if c.get("index") == old_n or citations.index(c) + 1 == old_n), None)
+                c = next(
+                    (
+                        c
+                        for c in citations
+                        if c.get("index") == old_n or citations.index(c) + 1 == old_n
+                    ),
+                    None,
+                )
                 if not c:
                     c = citations[old_n - 1] if 0 < old_n <= len(citations) else {}
                 appearance_order.append((old_n, c))
@@ -326,12 +341,17 @@ body {{ margin: 0; background: #000; }}
 def build_report_html(payload: dict[str, Any]) -> str:
     """Build a self-contained HTML report that embeds the same force-graph as the UI (exact replica)."""
     import json
+
     graph_trace = payload.get("graph_trace") or {}
     cited_set = set(str(x) for x in (graph_trace.get("cited_node_ids") or []))
     used_nodes = graph_trace.get("used_nodes") or []
     used_edges = graph_trace.get("used_edges") or []
     # Active = exactly what the session shows as green (traversal + cited), no explored vs visited distinction
-    active_node_ids = cited_set | {str(n.get("id") or n.get("node_id") or "") for n in used_nodes if n and (n.get("id") or n.get("node_id"))}
+    active_node_ids = cited_set | {
+        str(n.get("id") or n.get("node_id") or "")
+        for n in used_nodes
+        if n and (n.get("id") or n.get("node_id"))
+    }
     active_link_keys: list[str] = []
     for e in used_edges:
         src = str(e.get("source") or e.get("from") or "")
@@ -349,25 +369,44 @@ def build_report_html(payload: dict[str, Any]) -> str:
             edge_label_map[(tgt, src)] = label.strip()[:24]
 
     snapshot = payload.get("graph_snapshot")
-    if snapshot and snapshot.get("nodes") and all(
-        isinstance(n.get("x"), (int, float)) and isinstance(n.get("y"), (int, float))
-        for n in snapshot["nodes"]
+    if (
+        snapshot
+        and snapshot.get("nodes")
+        and all(
+            isinstance(n.get("x"), (int, float))
+            and isinstance(n.get("y"), (int, float))
+            for n in snapshot["nodes"]
+        )
     ):
         nodes = []
         for n in snapshot["nodes"]:
             x, y = float(n["x"]), float(n["y"])
-            nodes.append({
-                "id": str(n.get("id") or ""),
-                "label": n.get("label") or n.get("id") or "",
-                "x": x, "y": y, "fx": x, "fy": y, "val": 5,
-            })
+            nodes.append(
+                {
+                    "id": str(n.get("id") or ""),
+                    "label": n.get("label") or n.get("id") or "",
+                    "x": x,
+                    "y": y,
+                    "fx": x,
+                    "fy": y,
+                    "val": 5,
+                }
+            )
         node_ids = {n["id"] for n in nodes}
         links = []
-        for l in snapshot.get("links") or []:
-            src = str(l.get("source") or l.get("from") or "")
-            tgt = str(l.get("target") or l.get("to") or "")
+        for edge in snapshot.get("links") or []:
+            src = str(edge.get("source") or edge.get("from") or "")
+            tgt = str(edge.get("target") or edge.get("to") or "")
             if src in node_ids and tgt in node_ids:
-                link = {"source": src, "target": tgt, "label": l.get("label") or l.get("predicate") or edge_label_map.get((src, tgt)) or edge_label_map.get((tgt, src)) or ""}
+                link = {
+                    "source": src,
+                    "target": tgt,
+                    "label": edge.get("label")
+                    or edge.get("predicate")
+                    or edge_label_map.get((src, tgt))
+                    or edge_label_map.get((tgt, src))
+                    or "",
+                }
                 links.append(link)
         viewport = payload.get("graph_viewport") or {"panX": 0, "panY": 0, "zoom": 1}
     else:
@@ -378,12 +417,25 @@ def build_report_html(payload: dict[str, Any]) -> str:
             nodes = []
             for n in snapshot_nodes:
                 x, y = float(n["x"]), float(n["y"])
-                nodes.append({
-                    "id": str(n.get("id") or ""),
-                    "label": n.get("label") or n.get("id") or "",
-                    "x": x, "y": y, "fx": x, "fy": y, "val": 5,
-                })
-            links = [{"source": str(l.get("source") or l.get("from")), "target": str(l.get("target") or l.get("to")), "label": l.get("label") or l.get("predicate") or ""} for l in snapshot_links]
+                nodes.append(
+                    {
+                        "id": str(n.get("id") or ""),
+                        "label": n.get("label") or n.get("id") or "",
+                        "x": x,
+                        "y": y,
+                        "fx": x,
+                        "fy": y,
+                        "val": 5,
+                    }
+                )
+            links = [
+                {
+                    "source": str(link.get("source") or link.get("from")),
+                    "target": str(link.get("target") or link.get("to")),
+                    "label": link.get("label") or link.get("predicate") or "",
+                }
+                for link in snapshot_links
+            ]
             viewport = {"panX": 0, "panY": 0, "zoom": 1}
 
     messages, _, evidence_entries = citation_renumber(payload)
@@ -395,7 +447,9 @@ def build_report_html(payload: dict[str, Any]) -> str:
     transcript_html = ""
     for msg in messages:
         role = (msg.get("role") or "").upper()
-        content = _escape_html((msg.get("content") or "").strip()).replace("\n", "<br/>")
+        content = _escape_html((msg.get("content") or "").strip()).replace(
+            "\n", "<br/>"
+        )
         transcript_html += f"<p><strong>{role}:</strong> {content}</p>"
     evidence_html = ""
     for entry in evidence_entries:
@@ -404,18 +458,22 @@ def build_report_html(payload: dict[str, Any]) -> str:
         author = _escape_html(str(c.get("author") or ""))
         work = _escape_html(str(c.get("work_title") or ""))
         year = str(c.get("year") or "")
-        excerpt = _escape_html((c.get("chunk_text") or "").strip()[:500]).replace("\n", "<br/>")
+        excerpt = _escape_html((c.get("chunk_text") or "").strip()[:500]).replace(
+            "\n", "<br/>"
+        )
         year_str = f" ({year})" if year else ""
         evidence_html += f'<div class="citation"><p><strong>[{idx}]</strong> {author} — {work}{year_str}</p><p>{excerpt}</p></div>'
 
-    graph_state_json = json.dumps({
-        "nodes": nodes,
-        "links": links,
-        "citedIds": cited_ids,
-        "activeNodeIds": list(active_node_ids),
-        "activeLinkKeys": active_link_keys,
-        "viewport": viewport,
-    })
+    graph_state_json = json.dumps(
+        {
+            "nodes": nodes,
+            "links": links,
+            "citedIds": cited_ids,
+            "activeNodeIds": list(active_node_ids),
+            "activeLinkKeys": active_link_keys,
+            "viewport": viewport,
+        }
+    )
 
     embed_only = payload.get("embed_only") is True
     if embed_only:

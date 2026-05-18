@@ -22,6 +22,12 @@ jobs:
           pip install -e ".[dev]"
           python -m spacy download en_core_web_sm
 
+      - name: Ruff
+        run: ruff check src tests
+
+      - name: Black
+        run: black --check src tests
+
       - name: Tests (excluding live_integration)
         env:
           OPENAI_API_KEY: ""

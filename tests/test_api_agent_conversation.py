@@ -1,4 +1,5 @@
 """Tests for Option B: server-side conversation sessions keyed by conversation_id."""
+
 from __future__ import annotations
 
 import threading
@@ -48,7 +49,9 @@ def app_with_mocked_agents(monkeypatch, noop_lifespan):
     return app, api_main
 
 
-def test_agent_query_without_conversation_id_uses_fresh_agent(monkeypatch, app_with_mocked_agents):
+def test_agent_query_without_conversation_id_uses_fresh_agent(
+    monkeypatch, app_with_mocked_agents
+):
     """Without conversation_id, each request uses _create_philosopher_agent (new agent)."""
     app, api_main = app_with_mocked_agents
 
@@ -67,15 +70,21 @@ def test_agent_query_without_conversation_id_uses_fresh_agent(monkeypatch, app_w
     data = r.json()
     assert data["answer"] == "Fresh agent answer"
     assert "sequence_id" in data
-    mock_agent.query.assert_called_once_with(question="What is virtue?", max_iterations=2)
+    mock_agent.query.assert_called_once_with(
+        question="What is virtue?", max_iterations=2
+    )
 
 
-def test_agent_query_with_conversation_id_uses_stored_agent(monkeypatch, app_with_mocked_agents):
+def test_agent_query_with_conversation_id_uses_stored_agent(
+    monkeypatch, app_with_mocked_agents
+):
     """With conversation_id, request uses get_agent_for_conversation and same agent."""
     app, api_main = app_with_mocked_agents
 
     mock_agent = MagicMock()
-    mock_agent.query.return_value = _mock_agent_result("Stored agent answer", session_continued=True)
+    mock_agent.query.return_value = _mock_agent_result(
+        "Stored agent answer", session_continued=True
+    )
     lock = threading.Lock()
 
     def fake_get_agent(cid):
@@ -98,7 +107,9 @@ def test_agent_query_with_conversation_id_uses_stored_agent(monkeypatch, app_wit
     data = r.json()
     assert data["answer"] == "Stored agent answer"
     assert data["session_continued"] is True
-    mock_agent.query.assert_called_once_with(question="What is virtue?", max_iterations=2)
+    mock_agent.query.assert_called_once_with(
+        question="What is virtue?", max_iterations=2
+    )
 
 
 def test_agent_reset_without_body_resets_shared_agent(app_with_mocked_agents):
@@ -115,7 +126,9 @@ def test_agent_reset_without_body_resets_shared_agent(app_with_mocked_agents):
     api_main.state.philosopher_agent.reset_session.assert_called_once()
 
 
-def test_agent_reset_with_conversation_id_resets_that_agent(monkeypatch, app_with_mocked_agents):
+def test_agent_reset_with_conversation_id_resets_that_agent(
+    monkeypatch, app_with_mocked_agents
+):
     """POST /api/agent/reset with conversation_id resets that conversation's agent."""
     app, api_main = app_with_mocked_agents
 

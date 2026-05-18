@@ -2,6 +2,8 @@ import os
 
 import pytest
 
+pytest_plugins = ("test_concurrency",)
+
 
 def pytest_configure(config):
     """

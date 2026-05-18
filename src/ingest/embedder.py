@@ -1,4 +1,5 @@
 """Chunk embedding generation."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -32,17 +33,17 @@ class ChunkEmbedder:
     ) -> dict:
         """
         Embed all chunks and store in embedded_chunks table.
-        
+
         Args:
             batch_size: Number of chunks to embed per API call
             skip_existing: If True, only embed chunks not already in embedded_chunks
-        
+
         Returns:
             Dict with statistics
         """
         con = self.storage.con
         batch_size = batch_size or self.config.embedding_batch_size
-        
+
         # Ensure table exists
         con.execute("""
             CREATE TABLE IF NOT EXISTS embedded_chunks (
@@ -50,7 +51,7 @@ class ChunkEmbedder:
                 embedding DOUBLE[]
             )
         """)
-        
+
         # Get chunks to embed
         if skip_existing:
             chunks_df = con.execute("""
@@ -61,37 +62,45 @@ class ChunkEmbedder:
             """).fetchdf()
         else:
             chunks_df = con.execute("SELECT chunk_id, content FROM chunks").fetchdf()
-        
+
         total = len(chunks_df)
         if total == 0:
             print("✅ All chunks already embedded")
-            return {"embedded": 0, "total_in_table": con.execute("SELECT COUNT(*) FROM embedded_chunks").fetchone()[0]}
-        
+            return {
+                "embedded": 0,
+                "total_in_table": con.execute(
+                    "SELECT COUNT(*) FROM embedded_chunks"
+                ).fetchone()[0],
+            }
+
         print(f"📊 Embedding {total:,} chunks...")
-        
+
         from tqdm import tqdm
+
         embedded_count = 0
-        
+
         for i in tqdm(range(0, total, batch_size), desc="Embedding"):
-            batch = chunks_df.iloc[i:i+batch_size]
+            batch = chunks_df.iloc[i : i + batch_size]
             chunk_ids = batch["chunk_id"].tolist()
             texts = batch["content"].tolist()
-            
+
             # Get embeddings from OpenAI
             embeddings = self._get_embeddings(texts)
-            
+
             # Insert into table
             for chunk_id, embedding in zip(chunk_ids, embeddings):
                 con.execute(
                     "INSERT OR REPLACE INTO embedded_chunks (chunk_id, embedding) VALUES (?, ?)",
                     [chunk_id, embedding],
                 )
-            
+
             embedded_count += len(chunk_ids)
-        
-        total_in_table = con.execute("SELECT COUNT(*) FROM embedded_chunks").fetchone()[0]
+
+        total_in_table = con.execute("SELECT COUNT(*) FROM embedded_chunks").fetchone()[
+            0
+        ]
         print(f"✅ Embedded {embedded_count:,} chunks (total: {total_in_table:,})")
-        
+
         return {
             "embedded": embedded_count,
             "total_in_table": total_in_table,
@@ -101,12 +110,12 @@ class ChunkEmbedder:
         """Get embeddings for a batch of texts."""
         # Clean texts (remove newlines, truncate if needed)
         cleaned = [t.replace("\n", " ")[:8000] for t in texts]
-        
+
         response = self.llm_client.embeddings.create(
             input=cleaned,
             model=self.embedding_model,
         )
-        
+
         return [item.embedding for item in response.data]
 
     def get_embedding(self, text: str) -> list[float]:
@@ -120,12 +129,12 @@ class ChunkEmbedder:
     ) -> dict:
         """
         Embed canonical entities (optional, for entity-level search).
-        
+
         Creates entity_embeddings table.
         """
         con = self.storage.con
         batch_size = batch_size or self.config.embedding_batch_size
-        
+
         # Create table
         con.execute("""
             CREATE TABLE IF NOT EXISTS entity_embeddings (
@@ -133,39 +142,40 @@ class ChunkEmbedder:
                 embedding DOUBLE[]
             )
         """)
-        
+
         # Get entities to embed
         entities_df = con.execute(f"""
             SELECT DISTINCT entity_canon
             FROM {source_table}
             WHERE entity_canon NOT IN (SELECT entity_canon FROM entity_embeddings)
         """).fetchdf()
-        
+
         total = len(entities_df)
         if total == 0:
             print("✅ All entities already embedded")
             return {"embedded": 0}
-        
+
         print(f"📊 Embedding {total:,} entities...")
-        
+
         from tqdm import tqdm
+
         embedded_count = 0
-        
+
         for i in tqdm(range(0, total, batch_size), desc="Embedding"):
-            batch = entities_df.iloc[i:i+batch_size]
+            batch = entities_df.iloc[i : i + batch_size]
             entities = batch["entity_canon"].tolist()
-            
+
             # Get embeddings
             embeddings = self._get_embeddings(entities)
-            
+
             # Insert
             for entity, embedding in zip(entities, embeddings):
                 con.execute(
                     "INSERT OR REPLACE INTO entity_embeddings (entity_canon, embedding) VALUES (?, ?)",
                     [entity, embedding],
                 )
-            
+
             embedded_count += len(entities)
-        
+
         print(f"✅ Embedded {embedded_count:,} entities")
         return {"embedded": embedded_count}

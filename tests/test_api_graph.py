@@ -39,7 +39,7 @@ def test_api_graph_returns_string_ids(monkeypatch, noop_lifespan, reset_api_stat
 
     # Nodes must be objects, never primitives
     assert all(isinstance(n, dict) for n in nodes)
-    assert all(isinstance(l, dict) for l in links)
+    assert all(isinstance(link, dict) for link in links)
 
     # IDs must be strings
     for n in nodes:
@@ -47,15 +47,17 @@ def test_api_graph_returns_string_ids(monkeypatch, noop_lifespan, reset_api_stat
         assert n.get("id")
         assert isinstance(n.get("label"), str)
 
-    for l in links:
-        assert isinstance(l.get("source"), str)
-        assert isinstance(l.get("target"), str)
-        assert l.get("source")
-        assert l.get("target")
+    for link in links:
+        assert isinstance(link.get("source"), str)
+        assert isinstance(link.get("target"), str)
+        assert link.get("source")
+        assert link.get("target")
 
 
 @pytest.mark.parametrize("limit", [1, 2, 100])
-def test_api_graph_limit_is_respected(monkeypatch, noop_lifespan, reset_api_state, limit):
+def test_api_graph_limit_is_respected(
+    monkeypatch, noop_lifespan, reset_api_state, limit
+):
     from src.api import main as api_main
 
     monkeypatch.setattr(api_main, "lifespan", noop_lifespan)

@@ -1,4 +1,5 @@
 """Trace recording for agent execution."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -9,6 +10,7 @@ from datetime import datetime
 @dataclass
 class ThoughtStep:
     """A single step in the agent's reasoning."""
+
     step_number: int
     thought: str
     action: str | None = None
@@ -17,9 +19,10 @@ class ThoughtStep:
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
-@dataclass 
+@dataclass
 class TraceRecorder:
     """Records the agent's thinking process for debugging and UI display."""
+
     query: str
     thoughts: list[ThoughtStep] = field(default_factory=list)
     final_answer: str = ""
@@ -27,13 +30,23 @@ class TraceRecorder:
     total_chunks_retrieved: int = 0
     communities_explored: list[int] = field(default_factory=list)
     nodes_visited: list[str] = field(default_factory=list)
-    
+
     # Phase 3: Enhanced trace fields for GraphRAG routing
-    selected_community_ids: list[int] = field(default_factory=list)  # Communities from report search
-    community_report_scores: dict[int, float] = field(default_factory=dict)  # comm_id -> score
-    seed_entities: list[str] = field(default_factory=list)  # Seed nodes used for traversal
-    final_cited_chunk_ids: list[str] = field(default_factory=list)  # Chunks in final answer
-    paths: list[dict] = field(default_factory=list)  # Traversal paths: [{node_ids: [], edge_labels: []}]
+    selected_community_ids: list[int] = field(
+        default_factory=list
+    )  # Communities from report search
+    community_report_scores: dict[int, float] = field(
+        default_factory=dict
+    )  # comm_id -> score
+    seed_entities: list[str] = field(
+        default_factory=list
+    )  # Seed nodes used for traversal
+    final_cited_chunk_ids: list[str] = field(
+        default_factory=list
+    )  # Chunks in final answer
+    paths: list[dict] = field(
+        default_factory=list
+    )  # Traversal paths: [{node_ids: [], edge_labels: []}]
 
     def add_thought(
         self,
@@ -93,22 +106,32 @@ class TraceRecorder:
         """Get events formatted for WebSocket streaming."""
         events = []
         for thought in self.thoughts:
-            events.append({
-                "type": "thought",
-                "step": thought.step_number,
-                "content": thought.thought,
-            })
+            events.append(
+                {
+                    "type": "thought",
+                    "step": thought.step_number,
+                    "content": thought.thought,
+                }
+            )
             if thought.action:
-                events.append({
-                    "type": "action",
-                    "step": thought.step_number,
-                    "action": thought.action,
-                    "input": thought.action_input,
-                })
+                events.append(
+                    {
+                        "type": "action",
+                        "step": thought.step_number,
+                        "action": thought.action,
+                        "input": thought.action_input,
+                    }
+                )
             if thought.observation:
-                events.append({
-                    "type": "observation",
-                    "step": thought.step_number,
-                    "content": thought.observation[:200] + "..." if len(thought.observation) > 200 else thought.observation,
-                })
+                events.append(
+                    {
+                        "type": "observation",
+                        "step": thought.step_number,
+                        "content": (
+                            thought.observation[:200] + "..."
+                            if len(thought.observation) > 200
+                            else thought.observation
+                        ),
+                    }
+                )
         return events

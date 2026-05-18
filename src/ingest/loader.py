@@ -1,4 +1,5 @@
 """Load source corpus files into DuckDB."""
+
 from __future__ import annotations
 
 import html
@@ -58,7 +59,9 @@ def parse_resource_metadata(path: Path, fallback_id: int) -> ResourceFile:
 
     if len(title_parts) >= 2:
         author_source = title_parts[-1].replace("-", " ").strip() or None
-        title = " ".join(part.replace("-", " ").strip() for part in title_parts[:-1]).strip()
+        title = " ".join(
+            part.replace("-", " ").strip() for part in title_parts[:-1]
+        ).strip()
     else:
         title = path.stem.replace("_", " ").replace("-", " ").strip()
 
@@ -82,8 +85,7 @@ class CorpusLoader:
     def ensure_schema(self) -> None:
         """Create the raw corpus tables if they do not exist."""
         con = self.storage.con
-        con.execute(
-            """
+        con.execute("""
             CREATE TABLE IF NOT EXISTS files (
                 text_id INTEGER PRIMARY KEY,
                 file_path VARCHAR UNIQUE,
@@ -95,18 +97,15 @@ class CorpusLoader:
                 file_ext VARCHAR,
                 file_size_bytes BIGINT
             )
-            """
-        )
-        con.execute(
-            """
+            """)
+        con.execute("""
             CREATE TABLE IF NOT EXISTS raw_texts (
                 text_id INTEGER PRIMARY KEY,
                 content VARCHAR,
                 char_count INTEGER,
                 loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-            """
-        )
+            """)
 
     def list_resource_files(self) -> list[Path]:
         """Discover files under the configured resources directory."""
@@ -260,7 +259,9 @@ class CorpusLoader:
                                 total_pages,
                             )
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug("OCR failed on page %d of %s: %s", page_num, path.name, exc)
+                    logger.debug(
+                        "OCR failed on page %d of %s: %s", page_num, path.name, exc
+                    )
 
         result = "\n".join(part for part in text_parts if part).strip()
 
@@ -281,7 +282,12 @@ class CorpusLoader:
             else:
                 logger.warning("PDF yielded no text: %s", path.name)
         elif ocr_pages:
-            logger.info("OCR extracted text from %d/%d pages of %s", ocr_pages, total_pages, path.name)
+            logger.info(
+                "OCR extracted text from %d/%d pages of %s",
+                ocr_pages,
+                total_pages,
+                path.name,
+            )
 
         return result
 

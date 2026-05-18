@@ -2,19 +2,19 @@ from src.agents.philosopher_agent import _strip_trailing_citation_inventory
 
 
 def test_strip_trailing_inventory_single_paragraph_list():
-    raw = "Answer body.\n\n[1] \"Plato\", [2] \"Aristotle\", [3] \"Cicero\""
+    raw = 'Answer body.\n\n[1] "Plato", [2] "Aristotle", [3] "Cicero"'
     cleaned = _strip_trailing_citation_inventory(raw)
     assert cleaned == "Answer body."
 
 
 def test_strip_trailing_inventory_multiline_list():
-    raw = "Answer body.\n\n[1] \"Plato\"\n[2] \"Aristotle\"\n[3] \"Cicero\""
+    raw = 'Answer body.\n\n[1] "Plato"\n[2] "Aristotle"\n[3] "Cicero"'
     cleaned = _strip_trailing_citation_inventory(raw)
     assert cleaned == "Answer body."
 
 
 def test_strip_trailing_sources_header_and_list():
-    raw = "Answer body.\n\nSources:\n\n[1] \"Plato\", [2] \"Aristotle\""
+    raw = 'Answer body.\n\nSources:\n\n[1] "Plato", [2] "Aristotle"'
     cleaned = _strip_trailing_citation_inventory(raw)
     assert cleaned == "Answer body."
 
@@ -23,11 +23,11 @@ def test_strip_trailing_quoted_mapping_list_like_ui_example():
     # Matches the UI screenshot pattern: a trailing block that maps [n] -> quoted title/label.
     raw = (
         "Answer body.\n\n"
-        "[1] \"Plato and Aristotle on cycles of civilization,\" "
-        "[2] \"Great Depression impacts on global societies,\" "
-        "[3] \"Environmental changes in Mesopotamia,\" "
-        "[4] \"Cultural shifts in the decline of the Roman Empire,\" "
-        "[5] \"Tech in warfare and society destabilization.\""
+        '[1] "Plato and Aristotle on cycles of civilization," '
+        '[2] "Great Depression impacts on global societies," '
+        '[3] "Environmental changes in Mesopotamia," '
+        '[4] "Cultural shifts in the decline of the Roman Empire," '
+        '[5] "Tech in warfare and society destabilization."'
     )
     cleaned = _strip_trailing_citation_inventory(raw)
     assert cleaned == "Answer body."

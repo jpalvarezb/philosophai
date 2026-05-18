@@ -1,4 +1,5 @@
 """Entity and predicate canonicalization via lemmatization + embeddings."""
+
 from __future__ import annotations
 
 import json
@@ -19,13 +20,38 @@ if TYPE_CHECKING:
 PREDICATE_SYNONYMS = {
     "is": ["are", "be", "was", "were", "being", "am"],
     "has": ["have", "possesses", "possess", "owns", "own", "holds", "hold"],
-    "contains": ["includes", "include", "comprises", "comprise", "consists of",
-                 "incorporates", "incorporate", "encompasses", "encompass"],
-    "causes": ["cause", "produces", "produce", "creates", "create", "generates",
-               "results in", "leads to", "brings about", "gives rise to"],
+    "contains": [
+        "includes",
+        "include",
+        "comprises",
+        "comprise",
+        "consists of",
+        "incorporates",
+        "incorporate",
+        "encompasses",
+        "encompass",
+    ],
+    "causes": [
+        "cause",
+        "produces",
+        "produce",
+        "creates",
+        "create",
+        "generates",
+        "results in",
+        "leads to",
+        "brings about",
+        "gives rise to",
+    ],
     "requires": ["require", "needs", "need", "depends on", "necessitates", "demands"],
     "belongs to": ["belong to", "is part of", "is member of", "falls under"],
-    "derived from": ["derives from", "comes from", "originates from", "stems from", "arises from"],
+    "derived from": [
+        "derives from",
+        "comes from",
+        "originates from",
+        "stems from",
+        "arises from",
+    ],
     "called": ["named", "known as", "referred to as", "termed", "designated", "means"],
     "similar to": ["like", "resembles", "is like", "comparable to", "akin to"],
     "gives": ["give", "provides", "provide", "offers", "supplies", "grants", "bestows"],
@@ -36,7 +62,13 @@ PREDICATE_SYNONYMS = {
     "located in": ["located at", "found in", "situated in", "exists in", "resides in"],
     "associated with": ["related to", "connected to", "linked to", "tied to"],
     "used for": ["used as", "employed for", "utilized for", "serves as"],
-    "becomes": ["become", "turns into", "changes into", "transforms into", "evolves into"],
+    "becomes": [
+        "become",
+        "turns into",
+        "changes into",
+        "transforms into",
+        "evolves into",
+    ],
 }
 
 # Build reverse lookup
@@ -48,17 +80,37 @@ for canon, variants in PREDICATE_SYNONYMS.items():
 
 # Prepositions that carry distinct semantic roles (agent, locative, topic, etc.)
 # Different (verb_stem, prep) pairs must not merge unless whitelisted below.
-PREPOSITION_ROLE_SET = frozenset({
-    "by", "in", "on", "at", "to", "for", "from", "with", "about", "as",
-    "into", "onto", "upon", "within", "without", "during", "after", "before",
-})
+PREPOSITION_ROLE_SET = frozenset(
+    {
+        "by",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "from",
+        "with",
+        "about",
+        "as",
+        "into",
+        "onto",
+        "upon",
+        "within",
+        "without",
+        "during",
+        "after",
+        "before",
+    }
+)
 
 # Pairs of prepositions treated as equivalent for predicate merging (symmetric).
 # E.g. "written about" and "wrote on" both indicate topic.
-PREPOSITION_SYNONYM_PAIRS = frozenset({
-    ("about", "on"),   # topic: "written about" ≈ "wrote on"
-    ("on", "about"),
-})
+PREPOSITION_SYNONYM_PAIRS = frozenset(
+    {
+        ("about", "on"),  # topic: "written about" ≈ "wrote on"
+        ("on", "about"),
+    }
+)
 
 
 class EntityCanonicalizer:
@@ -85,6 +137,7 @@ class EntityCanonicalizer:
         """Lazy load spaCy model."""
         if self._nlp is None:
             import spacy
+
             print("🔧 Loading spaCy model...")
             self._nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
         return self._nlp
@@ -99,14 +152,16 @@ class EntityCanonicalizer:
             self._ner_nlp = spacy.load("en_core_web_sm", disable=["parser"])
         return self._ner_nlp
 
-    def get_embeddings_batch(self, texts: list[str], batch_size: int = 500) -> np.ndarray:
+    def get_embeddings_batch(
+        self, texts: list[str], batch_size: int = 500
+    ) -> np.ndarray:
         """Get embeddings for a list of texts."""
         if not self.llm_client:
             raise ValueError("LLM client required for embeddings")
-        
+
         all_embeddings = []
         for i in range(0, len(texts), batch_size):
-            batch = [t if t else " " for t in texts[i:i + batch_size]]
+            batch = [t if t else " " for t in texts[i : i + batch_size]]
             response = self.llm_client.embeddings.create(
                 input=batch,
                 model=self.embedding_model,
@@ -309,7 +364,9 @@ class EntityCanonicalizer:
         else:
             cluster_norms = np.linalg.norm(cluster_embeddings, axis=1)
             safe_norms = np.where(cluster_norms == 0, 1.0, cluster_norms)
-            centroid_scores = (cluster_embeddings @ centroid) / (safe_norms * centroid_norm)
+            centroid_scores = (cluster_embeddings @ centroid) / (
+                safe_norms * centroid_norm
+            )
 
         best_score = float(np.max(centroid_scores))
         candidate_indices = [
@@ -318,7 +375,9 @@ class EntityCanonicalizer:
             if np.isclose(score, best_score)
         ]
         if frequencies:
-            max_frequency = max(frequencies.get(terms[idx], 0) for idx in candidate_indices)
+            max_frequency = max(
+                frequencies.get(terms[idx], 0) for idx in candidate_indices
+            )
             candidate_indices = [
                 idx
                 for idx in candidate_indices
@@ -332,7 +391,18 @@ class EntityCanonicalizer:
 
     def _predicate_core_tokens(self, predicate: str) -> set[str]:
         """Extract lemma tokens for predicate direction checks."""
-        skip_tokens = {"is", "are", "was", "were", "be", "been", "being", "by", "from", "of"}
+        skip_tokens = {
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "by",
+            "from",
+            "of",
+        }
         return {
             token.lemma_.lower()
             for token in self.nlp(predicate.lower())
@@ -415,7 +485,11 @@ class EntityCanonicalizer:
             "WORK_OF_ART",
         }
         for ent in doc.ents:
-            if ent.start == 0 and ent.end == len(doc) and ent.label_ in named_entity_labels:
+            if (
+                ent.start == 0
+                and ent.end == len(doc)
+                and ent.label_ in named_entity_labels
+            ):
                 return ent.label_
         return None
 
@@ -423,8 +497,7 @@ class EntityCanonicalizer:
         """Load named-entity flags aggregated to current canonical entities."""
         con = self.storage.con
         try:
-            rows = con.execute(
-                """
+            rows = con.execute("""
                 SELECT
                     m.entity_canon,
                     MAX(CASE WHEN n.is_named_entity THEN 1 ELSE 0 END) AS is_named_entity
@@ -432,8 +505,7 @@ class EntityCanonicalizer:
                 LEFT JOIN entity_ner_map n
                   ON m.entity_orig = n.entity_orig
                 GROUP BY 1
-                """
-            ).fetchall()
+                """).fetchall()
         except Exception:
             return {}
 
@@ -567,21 +639,21 @@ class EntityCanonicalizer:
     ) -> dict:
         """
         Canonicalize entities in triples via lemmatization.
-        
+
         Creates:
         - entity_canon_map: original -> canonical mapping
         - target_table: triples with canonicalized entities
-        
+
         Args:
             source_table: Table with cleaned triples
             target_table: Table to create with canonicalized triples
             batch_size: Batch size for spaCy processing
-        
+
         Returns:
             Dict with statistics
         """
         con = self.storage.con
-        
+
         # 1. Get all unique entities
         print("📊 Extracting unique entities...")
         entities_df = con.execute(f"""
@@ -592,21 +664,22 @@ class EntityCanonicalizer:
                 WHERE object_norm IS NOT NULL AND object_norm != ''
             )
         """).fetchdf()
-        
-        entities = entities_df['entity'].tolist()
+
+        entities = entities_df["entity"].tolist()
         print(f"   Found {len(entities):,} unique entities")
-        
+
         # 2. Lemmatize all entities
         print("🔄 Lemmatizing entities...")
         entity_to_canon = {}
         entity_ner_rows: list[dict[str, object]] = []
-        
+
         from tqdm import tqdm
+
         for i in tqdm(range(0, len(entities), batch_size), desc="Lemmatizing"):
-            batch = entities[i:i+batch_size]
+            batch = entities[i : i + batch_size]
             docs = list(self.nlp.pipe([e.lower() if e else "" for e in batch]))
             ner_docs = list(self.ner_nlp.pipe([e if e else "" for e in batch]))
-            
+
             for entity, doc, ner_doc in zip(batch, docs, ner_docs):
                 if entity:
                     lemmas = " ".join([token.lemma_ for token in doc])
@@ -619,23 +692,26 @@ class EntityCanonicalizer:
                             "is_named_entity": bool(ner_label),
                         }
                     )
-        
+
         # 3. Check merge statistics
         unique_canons = set(entity_to_canon.values())
         merged_count = len(entities) - len(unique_canons)
         print(f"   Original entities: {len(entities):,}")
         print(f"   Canonical forms:   {len(unique_canons):,}")
-        print(f"   Merged:            {merged_count:,} ({100*merged_count/len(entities):.1f}%)")
-        
+        print(
+            f"   Merged:            {merged_count:,} ({100*merged_count/len(entities):.1f}%)"
+        )
+
         # 4. Create mapping table
         print("📝 Creating entity_canon_map table...")
         import pandas as pd
-        map_df = pd.DataFrame([
-            {"entity_orig": k, "entity_canon": v} 
-            for k, v in entity_to_canon.items()
-        ])
-        
+
+        map_df = pd.DataFrame(
+            [{"entity_orig": k, "entity_canon": v} for k, v in entity_to_canon.items()]
+        )
+
         con.execute("DROP TABLE IF EXISTS entity_canon_map")
+        con.register("map_df", map_df)
         con.execute("CREATE TABLE entity_canon_map AS SELECT * FROM map_df")
 
         ner_df = pd.DataFrame(entity_ner_rows)
@@ -645,7 +721,7 @@ class EntityCanonicalizer:
             )
         con.execute("DROP TABLE IF EXISTS entity_ner_map")
         con.execute("CREATE TABLE entity_ner_map AS SELECT * FROM ner_df")
-        
+
         # 5. Create canonicalized triples table
         print(f"🔧 Creating {target_table}...")
         con.execute(f"DROP TABLE IF EXISTS {target_table}")
@@ -672,11 +748,11 @@ class EntityCanonicalizer:
             LEFT JOIN entity_canon_map sm ON t.subject_norm = sm.entity_orig
             LEFT JOIN entity_canon_map om ON t.object_norm = om.entity_orig
         """)
-        
+
         # 6. Verify
         count = con.execute(f"SELECT COUNT(*) FROM {target_table}").fetchone()[0]
         print(f"✅ Created {target_table} with {count:,} triples")
-        
+
         # Show sample merges
         print("\n📋 Sample merges:")
         samples = con.execute("""
@@ -687,7 +763,7 @@ class EntityCanonicalizer:
         """).fetchdf()
         for _, row in samples.iterrows():
             print(f'   "{row["entity_orig"]}" → "{row["entity_canon"]}"')
-        
+
         return {
             "original_entities": len(entities),
             "canonical_entities": len(unique_canons),
@@ -716,18 +792,18 @@ class EntityCanonicalizer:
     ) -> dict:
         """
         Canonicalize predicates using synonym list + embedding similarity.
-        
+
         Args:
             source_table: Table with predicates to canonicalize
             similarity_threshold: Min cosine similarity to merge
             min_frequency: Only embed predicates with >= this frequency
         """
         con = self.storage.con
-        
+
         print("\n" + "=" * 50)
         print("PREDICATE CANONICALIZATION")
         print("=" * 50)
-        
+
         # 1. Get all unique predicates with frequency
         print("📊 Extracting predicates...")
         pred_df = con.execute(f"""
@@ -737,51 +813,57 @@ class EntityCanonicalizer:
             GROUP BY predicate_norm
             ORDER BY cnt DESC
         """).fetchdf()
-        
-        all_predicates = pred_df['predicate'].tolist()
+
+        all_predicates = pred_df["predicate"].tolist()
         print(f"   Found {len(all_predicates):,} unique predicates")
-        
+
         # 2. First pass: apply synonym list + lemmatization
         print("🔄 Applying synonym list + lemmatization...")
         pred_to_canon = {}
         from tqdm import tqdm
-        
+
         for pred in tqdm(all_predicates, desc="Processing"):
             pred_lower = pred.lower().strip()
-            
+
             # Try synonym list first
             if pred_lower in PREDICATE_TO_CANON:
                 pred_to_canon[pred] = PREDICATE_TO_CANON[pred_lower]
                 continue
-            
+
             # Lemmatize
             doc = self.nlp(pred_lower)
             lemma = " ".join([t.lemma_ for t in doc])
-            
+
             # Check if lemma is in synonym list
             if lemma in PREDICATE_TO_CANON:
                 pred_to_canon[pred] = PREDICATE_TO_CANON[lemma]
             else:
                 pred_to_canon[pred] = lemma
-        
+
         # Stats after first pass
         unique_after_lemma = len(set(pred_to_canon.values()))
-        print(f"   After lemmatization: {len(all_predicates):,} → {unique_after_lemma:,}")
-        
+        print(
+            f"   After lemmatization: {len(all_predicates):,} → {unique_after_lemma:,}"
+        )
+
         # 3. Second pass: embedding clustering for frequent predicates
         if self.llm_client:
-            high_freq_preds = pred_df[pred_df['cnt'] >= min_frequency]['predicate'].tolist()
-            
+            high_freq_preds = pred_df[pred_df["cnt"] >= min_frequency][
+                "predicate"
+            ].tolist()
+
             if len(high_freq_preds) > 1:
-                print(f"🧠 Computing embeddings for {len(high_freq_preds):,} frequent predicates...")
-                
+                print(
+                    f"🧠 Computing embeddings for {len(high_freq_preds):,} frequent predicates..."
+                )
+
                 # Get canonical forms for high-freq predicates
                 canon_forms = list(set(pred_to_canon[p] for p in high_freq_preds))
                 pred_frequencies = dict(zip(pred_df["predicate"], pred_df["cnt"]))
                 canon_frequencies: defaultdict[str, int] = defaultdict(int)
                 for pred, canon in pred_to_canon.items():
                     canon_frequencies[canon] += int(pred_frequencies.get(pred, 0))
-                
+
                 if len(canon_forms) > 1:
                     embeddings = self.get_embeddings_batch(canon_forms)
                     blocked_pairs = {
@@ -790,7 +872,7 @@ class EntityCanonicalizer:
                         if self.is_inverse_predicate_pair(left, right)
                         or self.has_conflicting_preposition_roles(left, right)
                     }
-                    
+
                     print(f"🔗 Clustering (threshold={similarity_threshold})...")
                     canon_to_merged = self.cluster_by_similarity(
                         canon_forms,
@@ -799,28 +881,34 @@ class EntityCanonicalizer:
                         blocked_pairs=blocked_pairs,
                         frequencies=dict(canon_frequencies),
                     )
-                    
+
                     # Apply to all predicates
                     for pred, canon in pred_to_canon.items():
                         if canon in canon_to_merged:
                             pred_to_canon[pred] = canon_to_merged[canon]
-        
+
         # Final stats
         unique_canons = set(pred_to_canon.values())
         merged = len(all_predicates) - len(unique_canons)
         print(f"   Final: {len(all_predicates):,} → {len(unique_canons):,}")
-        print(f"   Merged: {merged:,} predicates ({100*merged/len(all_predicates):.1f}%)")
-        
+        print(
+            f"   Merged: {merged:,} predicates ({100*merged/len(all_predicates):.1f}%)"
+        )
+
         # 4. Save mapping and update table
         print("💾 Saving predicate_canon_map...")
         import pandas as pd
-        map_df = pd.DataFrame([
-            {"predicate_orig": k, "predicate_canon": v}
-            for k, v in pred_to_canon.items()
-        ])
+
+        map_df = pd.DataFrame(
+            [
+                {"predicate_orig": k, "predicate_canon": v}
+                for k, v in pred_to_canon.items()
+            ]
+        )
         con.execute("DROP TABLE IF EXISTS predicate_canon_map")
+        con.register("map_df", map_df)
         con.execute("CREATE TABLE predicate_canon_map AS SELECT * FROM map_df")
-        
+
         print(f"🔧 Updating {source_table}...")
         con.execute(f"""
             UPDATE {source_table} t
@@ -829,18 +917,22 @@ class EntityCanonicalizer:
                 WHERE m.predicate_orig = t.predicate_norm
             )
         """)
-        
+
         # Show top merges
         print("\n📋 Top predicate clusters:")
         clusters = defaultdict(list)
         for orig, canon in pred_to_canon.items():
             if orig.lower() != canon:
                 clusters[canon].append(orig)
-        
+
         for canon, variants in sorted(clusters.items(), key=lambda x: -len(x[1]))[:8]:
             print(f'   "{canon}" ← {variants[:5]}')
-        
-        return {"original": len(all_predicates), "canonical": len(unique_canons), "merged": merged}
+
+        return {
+            "original": len(all_predicates),
+            "canonical": len(unique_canons),
+            "merged": merged,
+        }
 
     def canonicalize_entities_semantic(
         self,
@@ -856,7 +948,7 @@ class EntityCanonicalizer:
         """
         Further canonicalize entities using embedding similarity.
         Run AFTER basic lemmatization canonicalize().
-        
+
         Args:
             source_table: Table with entities
             similarity_threshold: Min cosine similarity to merge
@@ -866,13 +958,13 @@ class EntityCanonicalizer:
         if not self.llm_client:
             print("⚠️ LLM client required for semantic entity canonicalization")
             return {"merged": 0}
-        
+
         con = self.storage.con
-        
+
         print("\n" + "=" * 50)
         print("SEMANTIC ENTITY CANONICALIZATION")
         print("=" * 50)
-        
+
         # Get frequent entities
         print("📊 Extracting frequent entities...")
         entity_df = con.execute(f"""
@@ -887,17 +979,16 @@ class EntityCanonicalizer:
             ORDER BY total DESC
             LIMIT {max_entities}
         """).fetchdf()
-        
-        entities = entity_df['entity'].tolist()
+
+        entities = entity_df["entity"].tolist()
         entity_frequencies = {
-            row["entity"]: int(row["total"])
-            for _, row in entity_df.iterrows()
+            row["entity"]: int(row["total"]) for _, row in entity_df.iterrows()
         }
         print(f"   Found {len(entities):,} entities (freq >= {min_frequency})")
-        
+
         if len(entities) < 2:
             return {"merged": 0}
-        
+
         # Get embeddings
         print("🧠 Computing entity embeddings...")
         embeddings = self.get_embeddings_batch(entities)
@@ -955,7 +1046,7 @@ class EntityCanonicalizer:
         )
         if forced_pairs:
             print(f"🤝 SameJudge approved {len(forced_pairs):,} ambiguous merges")
-        
+
         # Cluster
         print(f"🔗 Clustering (threshold={similarity_threshold})...")
         entity_to_merged = self.cluster_by_similarity(
@@ -967,36 +1058,39 @@ class EntityCanonicalizer:
             frequencies=entity_frequencies,
             sim_matrix=sim_matrix,
         )
-        
+
         # Stats
         unique_canons = set(entity_to_merged.values())
         merged = len(entities) - len(unique_canons)
         print(f"   Clustered: {len(entities):,} → {len(unique_canons):,}")
         print(f"   Merged: {merged:,} entities")
-        
+
         if merged == 0:
             return {"merged": 0}
-        
+
         # Update entity_canon_map
         print("💾 Updating entity_canon_map...")
-        existing = con.execute("SELECT entity_orig, entity_canon FROM entity_canon_map").fetchdf()
-        existing_dict = dict(zip(existing['entity_orig'], existing['entity_canon']))
-        
+        existing = con.execute(
+            "SELECT entity_orig, entity_canon FROM entity_canon_map"
+        ).fetchdf()
+        existing_dict = dict(zip(existing["entity_orig"], existing["entity_canon"]))
+
         # Remap: if old canonical → new canonical, update all that pointed to old
         for old_canon, new_canon in entity_to_merged.items():
             if old_canon != new_canon:
                 for orig, canon in list(existing_dict.items()):
                     if canon == old_canon:
                         existing_dict[orig] = new_canon
-        
+
         import pandas as pd
-        map_df = pd.DataFrame([
-            {"entity_orig": k, "entity_canon": v}
-            for k, v in existing_dict.items()
-        ])
+
+        map_df = pd.DataFrame(
+            [{"entity_orig": k, "entity_canon": v} for k, v in existing_dict.items()]
+        )
         con.execute("DROP TABLE IF EXISTS entity_canon_map")
+        con.register("map_df", map_df)
         con.execute("CREATE TABLE entity_canon_map AS SELECT * FROM map_df")
-        
+
         # Update source table
         print(f"🔧 Updating {source_table}...")
         con.execute(f"""
@@ -1011,18 +1105,23 @@ class EntityCanonicalizer:
                     t.object_canon_id
                 )
         """)
-        
+
         # Show sample merges
         print("\n📋 Sample entity clusters:")
         clusters = defaultdict(list)
         for orig, canon in entity_to_merged.items():
             if orig != canon:
                 clusters[canon].append(orig)
-        
+
         for canon, variants in sorted(clusters.items(), key=lambda x: -len(x[1]))[:8]:
             print(f'   "{canon}" ← {variants[:5]}')
-        
-        return {"original": len(entities), "canonical": len(unique_canons), "merged": merged}
+
+        return {
+            "original": len(entities),
+            "canonical": len(unique_canons),
+            "merged": merged,
+        }
+
     def dedupe_subject_object_pairs(
         self,
         table: str = "normalized_triples_clean_canon",
@@ -1040,22 +1139,19 @@ class EntityCanonicalizer:
 
         try:
             before_rows = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            before_pairs = con.execute(
-                f"""
+            before_pairs = con.execute(f"""
                 SELECT COUNT(*) FROM (
                     SELECT subject_canon_id, object_canon_id
                     FROM {table}
                     WHERE object_canon_id IS NOT NULL AND object_canon_id != ''
                     GROUP BY 1, 2
                 )
-                """
-            ).fetchone()[0]
+                """).fetchone()[0]
         except Exception as e:
             print(f"❌ Could not read from {table}: {e}")
             return {"deduped": False, "error": str(e)}
 
-        con.execute(
-            f"""
+        con.execute(f"""
             CREATE OR REPLACE TABLE {table} AS
             WITH pred_support AS (
                 SELECT
@@ -1084,24 +1180,20 @@ class EntityCanonicalizer:
             SELECT * EXCLUDE(pred_rank, support)
             FROM ranked
             WHERE (object_canon_id IS NULL OR object_canon_id = '' OR pred_rank = 1)
-            """
-        )
+            """)
 
         after_rows = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        after_pairs = con.execute(
-            f"""
+        after_pairs = con.execute(f"""
             SELECT COUNT(*) FROM (
                 SELECT subject_canon_id, object_canon_id
                 FROM {table}
                 WHERE object_canon_id IS NOT NULL AND object_canon_id != ''
                 GROUP BY 1, 2
             )
-            """
-        ).fetchone()[0]
+            """).fetchone()[0]
 
         removed_rows = before_rows - after_rows
-        multi_pairs_removed = con.execute(
-            f"""
+        multi_pairs_removed = con.execute(f"""
             SELECT COUNT(*) FROM (
                 SELECT subject_canon_id, object_canon_id
                 FROM {table}
@@ -1109,8 +1201,7 @@ class EntityCanonicalizer:
                 GROUP BY 1, 2
                 HAVING COUNT(DISTINCT predicate_canon_id) > 1
             )
-            """
-        ).fetchone()[0]
+            """).fetchone()[0]
 
         print(f"Rows: {before_rows:,} → {after_rows:,} (removed {removed_rows:,})")
         print(f"Subject–object pairs: {before_pairs:,} → {after_pairs:,}")
@@ -1149,19 +1240,21 @@ class EntityCanonicalizer:
             else self.config.predicate_threshold
         )
         entity_threshold = (
-            entity_threshold if entity_threshold is not None else self.config.entity_threshold
+            entity_threshold
+            if entity_threshold is not None
+            else self.config.entity_threshold
         )
-        
+
         # Step 1: Basic entity lemmatization
         print("\n--- Step 1: Entity Lemmatization ---")
         entity_stats = self.canonicalize(source_table, target_table)
-        
+
         # Step 2: Predicate canonicalization
         print("\n--- Step 2: Predicate Canonicalization ---")
         pred_stats = self.canonicalize_predicates(
             target_table, similarity_threshold=predicate_threshold
         )
-        
+
         # Step 3: Semantic entity merging
         print("\n--- Step 3: Semantic Entity Merging ---")
         sem_stats = self.canonicalize_entities_semantic(
@@ -1171,13 +1264,13 @@ class EntityCanonicalizer:
         # Step 4: Deduplicate subject-object pairs to a single predicate
         print("\n--- Step 4: Deduplicate Subject/Object Pairs ---")
         dedup_stats = self.dedupe_subject_object_pairs(target_table)
-        
+
         # Final edge weight distribution
         con = self.storage.con
         print("\n" + "=" * 60)
         print("FINAL EDGE WEIGHT DISTRIBUTION")
         print("=" * 60)
-        
+
         edge_stats = con.execute(f"""
             SELECT weight, COUNT(*) as cnt FROM (
                 SELECT subject_canon_id, predicate_canon_id, object_canon_id,
@@ -1187,15 +1280,15 @@ class EntityCanonicalizer:
             )
             GROUP BY weight ORDER BY weight
         """).fetchdf()
-        
+
         for _, row in edge_stats.head(10).iterrows():
             print(f"   weight={int(row['weight'])}: {int(row['cnt']):,} edges")
-        
-        total = edge_stats['cnt'].sum()
-        gt1 = edge_stats[edge_stats['weight'] > 1]['cnt'].sum()
+
+        total = edge_stats["cnt"].sum()
+        gt1 = edge_stats[edge_stats["weight"] > 1]["cnt"].sum()
         print(f"\n   Total edges: {total:,}")
         print(f"   Edges with weight > 1: {gt1:,} ({100*gt1/total:.1f}%)")
-        
+
         return {
             "entity_lemmatization": entity_stats,
             "predicate_canonicalization": pred_stats,

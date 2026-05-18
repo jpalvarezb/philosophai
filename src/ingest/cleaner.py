@@ -1,4 +1,5 @@
 """Triple cleaning - filter noise and metadata from extracted triples."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -235,7 +236,9 @@ class TripleCleaner:
             clauses.append(f"LOWER(subject_norm) = '{escaped}'")
             clauses.append(f"LOWER(object_norm) = '{escaped}'")
 
-        type_rules = self.config.cleaning_rules.type_rules if self.config.cleaning_rules else {}
+        type_rules = (
+            self.config.cleaning_rules.type_rules if self.config.cleaning_rules else {}
+        )
         for entity_type, patterns in type_rules.items():
             escaped_type = self._escape_like(entity_type)
             for pattern in patterns:
@@ -259,17 +262,17 @@ class TripleCleaner:
     ) -> dict:
         """
         Clean triples by filtering noise patterns.
-        
+
         Args:
             source_table: Table with normalized triples
             target_table: Table to create with cleaned triples
             dry_run: If True, only report what would be removed
-        
+
         Returns:
             Dict with statistics
         """
         con = self.storage.con
-        
+
         # Count before
         total = con.execute(f"SELECT COUNT(*) FROM {source_table}").fetchone()[0]
         print(f"📊 Total triples in {source_table}: {total:,}")
@@ -281,7 +284,7 @@ class TripleCleaner:
             f"SELECT COUNT(*) FROM {source_table} WHERE {noise_filter_sql}"
         ).fetchone()[0]
         print(f"🗑️  Noise triples: {noise_count:,} ({100*noise_count/total:.1f}%)")
-        
+
         if dry_run:
             # Preview what would be removed
             print("\n📋 Sample triples to be removed:")
@@ -292,15 +295,17 @@ class TripleCleaner:
                 LIMIT 10
             """).fetchdf()
             for _, row in sample.iterrows():
-                print(f"   ({row['subject_norm']}, {row['predicate_norm']}, {row['object_norm']})")
-            
+                print(
+                    f"   ({row['subject_norm']}, {row['predicate_norm']}, {row['object_norm']})"
+                )
+
             return {
                 "total": total,
                 "noise": noise_count,
                 "clean": total - noise_count,
                 "dry_run": True,
             }
-        
+
         # Create cleaned table
         print(f"\n🔧 Creating {target_table}...")
         con.execute(f"DROP TABLE IF EXISTS {target_table}")
@@ -339,11 +344,11 @@ class TripleCleaner:
             FROM ranked
             WHERE (object_norm IS NULL OR object_norm = '' OR pred_rank = 1)
         """)
-        
+
         # Count after
         clean_count = con.execute(f"SELECT COUNT(*) FROM {target_table}").fetchone()[0]
         print(f"✅ Clean triples: {clean_count:,}")
-        
+
         return {
             "total": total,
             "noise": noise_count,

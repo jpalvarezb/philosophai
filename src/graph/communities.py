@@ -1,4 +1,5 @@
 """Community detection and summarization using Leiden algorithm."""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -9,6 +10,7 @@ import networkx as nx
 try:
     import leidenalg
     import igraph as ig
+
     LEIDEN_AVAILABLE = True
 except ImportError:
     LEIDEN_AVAILABLE = False
@@ -16,13 +18,12 @@ except ImportError:
 if TYPE_CHECKING:
     from openai import OpenAI
     from ..storage import DuckDBStorage
-    from ..schema import Community
 
 
 class CommunityDetector:
     """
     Detects communities in the knowledge graph using Leiden algorithm.
-    
+
     Supports two modes:
     - cluster_graph: Use pre-built cluster projection (recommended)
     - graph: Use full directed graph with filtering (legacy)
@@ -61,7 +62,7 @@ class CommunityDetector:
     ) -> dict[int, list[str]]:
         """
         Run Leiden community detection.
-        
+
         Uses cluster_graph if provided (recommended), otherwise falls back to
         filtering the full directed graph.
 
@@ -104,7 +105,7 @@ class CommunityDetector:
         This is the recommended mode - predicates are already collapsed.
         """
         import math
-        
+
         G = self.cluster_graph
         total_nodes = G.number_of_nodes()
         print("🔍 Using cluster projection graph...")
@@ -117,15 +118,17 @@ class CommunityDetector:
             weight = data.get("weight", 1)
             if weight >= min_edge_weight:
                 # Apply weight transform to reduce dominance of heavy edges
-                transformed_weight = math.log1p(weight) if use_weight_transform else weight
+                transformed_weight = (
+                    math.log1p(weight) if use_weight_transform else weight
+                )
                 filtered_edges.append((u, v, transformed_weight))
             else:
                 skipped += 1
-        
+
         if min_edge_weight > 1:
             print(f"   Skipped {skipped} edges with weight < {min_edge_weight}")
         if use_weight_transform:
-            print(f"   Using log1p weight transform")
+            print("   Using log1p weight transform")
 
         # Build node set
         node_set = set()
@@ -143,9 +146,12 @@ class CommunityDetector:
 
             stop_entities = {n for n, d in degree_count.items() if d > degree_threshold}
             if stop_entities:
-                print(f"   Dropping {len(stop_entities)} stop entities (degree > {degree_threshold})")
+                print(
+                    f"   Dropping {len(stop_entities)} stop entities (degree > {degree_threshold})"
+                )
                 filtered_edges = [
-                    (u, v, w) for u, v, w in filtered_edges
+                    (u, v, w)
+                    for u, v, w in filtered_edges
                     if u not in stop_entities and v not in stop_entities
                 ]
                 node_set -= stop_entities
@@ -203,7 +209,7 @@ class CommunityDetector:
         Not recommended - use cluster projection instead.
         """
         import math
-        
+
         total_nodes = self.graph.number_of_nodes()
         print("🔍 Using directed graph (legacy mode)...")
         print(f"   Original: {total_nodes} nodes, {self.graph.number_of_edges()} edges")
@@ -214,11 +220,13 @@ class CommunityDetector:
         for u, v, key, data in self.graph.edges(keys=True, data=True):
             weight = data.get("weight", 1)
             if weight >= min_edge_weight:
-                transformed_weight = math.log1p(weight) if use_weight_transform else weight
+                transformed_weight = (
+                    math.log1p(weight) if use_weight_transform else weight
+                )
                 filtered_edges.append((u, v, transformed_weight))
             else:
                 skipped += 1
-        
+
         if min_edge_weight > 1:
             print(f"   Skipped {skipped} edges with weight < {min_edge_weight}")
 
@@ -238,9 +246,12 @@ class CommunityDetector:
 
             stop_entities = {n for n, d in degree_count.items() if d > degree_threshold}
             if stop_entities:
-                print(f"   Dropping {len(stop_entities)} stop entities (degree > {degree_threshold})")
+                print(
+                    f"   Dropping {len(stop_entities)} stop entities (degree > {degree_threshold})"
+                )
                 filtered_edges = [
-                    (u, v, w) for u, v, w in filtered_edges
+                    (u, v, w)
+                    for u, v, w in filtered_edges
                     if u not in stop_entities and v not in stop_entities
                 ]
                 node_set -= stop_entities
@@ -289,12 +300,16 @@ class CommunityDetector:
     def _print_stats(self, total_nodes: int, clustered_nodes: int, unclustered: set):
         """Print community statistics with coverage metrics."""
         coverage = 100 * clustered_nodes / total_nodes if total_nodes > 0 else 0
-        
+
         print(f"✅ Found {len(self.communities)} communities")
-        print(f"   Clustered: {clustered_nodes:,} / {total_nodes:,} nodes ({coverage:.1f}% coverage)")
+        print(
+            f"   Clustered: {clustered_nodes:,} / {total_nodes:,} nodes ({coverage:.1f}% coverage)"
+        )
         print(f"   Unclustered: {len(unclustered):,} nodes (comm_id = -1)")
 
-        sizes = sorted([len(nodes) for nodes in self.communities.values()], reverse=True)
+        sizes = sorted(
+            [len(nodes) for nodes in self.communities.values()], reverse=True
+        )
         if sizes:
             print(f"   Largest: {sizes[0]} nodes")
             print(f"   Top 5 sizes: {sizes[:5]}")
@@ -318,7 +333,7 @@ class CommunityDetector:
 
         node_ids = self.communities[community_id]
         G = self._get_working_graph()
-        
+
         # Score by degree within community
         subgraph = G.subgraph(node_ids)
         degree_scores = dict(subgraph.degree())
@@ -345,13 +360,17 @@ class CommunityDetector:
         # Get sample edges from this community
         sample_triples = []
         subgraph = G.subgraph(node_ids)
-        
+
         for u, v, *rest in list(subgraph.edges(data=True))[:20]:
             data = rest[0] if rest else {}
             u_label = G.nodes.get(u, {}).get("label", u)
             v_label = G.nodes.get(v, {}).get("label", v)
             # For cluster graph, use top_predicates; for full graph, use label
-            pred_label = data.get("label") or (data.get("top_predicates", ["related to"])[0] if data.get("top_predicates") else "related to")
+            pred_label = data.get("label") or (
+                data.get("top_predicates", ["related to"])[0]
+                if data.get("top_predicates")
+                else "related to"
+            )
             sample_triples.append(f"({u_label}, {pred_label}, {v_label})")
 
         prompt = f"""Summarize this knowledge graph community in 2-3 sentences.
@@ -444,11 +463,15 @@ Write a concise summary describing what this community is about - the main theme
         print("\n" + "=" * 60)
         print("COMPARISON SUMMARY")
         print("=" * 60)
-        print(f"{'Res':<6} {'Comms':<8} {'Coverage':<10} {'Largest':<8} {'>10':<6} {'>50':<6} {'>100':<6}")
+        print(
+            f"{'Res':<6} {'Comms':<8} {'Coverage':<10} {'Largest':<8} {'>10':<6} {'>50':<6} {'>100':<6}"
+        )
         print("-" * 70)
         for res in resolutions:
             r = results[res]
-            print(f"{res:<6.1f} {r['num_communities']:<8} {r['coverage_pct']:<9.1f}% {r['largest']:<8} {r['gt_10']:<6} {r['gt_50']:<6} {r['gt_100']:<6}")
+            print(
+                f"{res:<6.1f} {r['num_communities']:<8} {r['coverage_pct']:<9.1f}% {r['largest']:<8} {r['gt_10']:<6} {r['gt_50']:<6} {r['gt_100']:<6}"
+            )
 
         return results
 
@@ -482,12 +505,15 @@ Write a concise summary describing what this community is about - the main theme
         # Store ALL communities (for membership coverage)
         all_communities = list(self.communities.items())
         communities_to_summarize = [
-            (cid, nodes) for cid, nodes in all_communities
+            (cid, nodes)
+            for cid, nodes in all_communities
             if len(nodes) >= min_community_size_for_summary
         ]
 
         print(f"\n📝 Storing {len(all_communities)} total communities...")
-        print(f"   Summarizing {len(communities_to_summarize)} communities (size >= {min_community_size_for_summary})")
+        print(
+            f"   Summarizing {len(communities_to_summarize)} communities (size >= {min_community_size_for_summary})"
+        )
 
         summarized_count = 0
         for i, (cid, node_ids) in enumerate(all_communities):
@@ -520,7 +546,9 @@ Write a concise summary describing what this community is about - the main theme
             if (i + 1) % 100 == 0:
                 print(f"   Stored {i + 1}/{len(all_communities)} communities")
 
-        print(f"✅ Stored {len(all_communities)} communities ({summarized_count} summarized)")
+        print(
+            f"✅ Stored {len(all_communities)} communities ({summarized_count} summarized)"
+        )
 
     def get_node_community(self, node_id: str) -> int | None:
         """Get community ID for a node."""
