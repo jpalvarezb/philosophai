@@ -5,6 +5,7 @@ Concurrency tests for the PhilosopherAgent API.
 - Real-agent test: uses real PhilosopherAgent and real LLM; skipped if OPENAI_API_KEY
   or DB not available. Run with: pytest -m live_integration
 """
+
 import asyncio
 import os
 import time
@@ -19,7 +20,7 @@ MOCK_AGENT_SLEEP = 0.25
 
 # If requests ran serially, N requests would take at least N * MOCK_AGENT_SLEEP.
 # We assert total time is under this to prove concurrency (allow some overhead).
-MAX_WALL_TIME_3 = 0.9   # 3 * 0.25 = 0.75; 0.9 allows slack
+MAX_WALL_TIME_3 = 0.9  # 3 * 0.25 = 0.75; 0.9 allows slack
 MAX_WALL_TIME_5 = 1.35  # 5 * 0.25 = 1.25; 1.35 allows slack for 5-way e2e
 
 NUM_CONCURRENT_REQUESTS = 3
@@ -60,6 +61,7 @@ def _live_env_ready():
     if not os.environ.get("OPENAI_API_KEY"):
         return False
     from src.api import main as api_main
+
     db_path_raw = os.environ.get("PHILOSOPH_DB", "data/philosoph.duckdb")
     db_path = Path(db_path_raw)
     if not db_path.is_absolute():
@@ -88,9 +90,7 @@ def app_with_real_agent(monkeypatch, noop_lifespan, reset_api_state):
 
 
 @pytest.mark.asyncio
-async def test_agent_query_requests_run_concurrently(
-    app_with_mock_agent, monkeypatch
-):
+async def test_agent_query_requests_run_concurrently(app_with_mock_agent, monkeypatch):
     """
     Fire N concurrent POST /api/agent/query requests.
 
@@ -186,9 +186,7 @@ async def test_five_e2e_agent_requests_run_in_parallel(
 
 
 @pytest.mark.asyncio
-async def test_greeting_requests_run_concurrently(
-    app_with_mock_agent, monkeypatch
-):
+async def test_greeting_requests_run_concurrently(app_with_mock_agent, monkeypatch):
     """
     Fire N concurrent GET /api/agent/greeting requests.
 
@@ -213,8 +211,7 @@ async def test_greeting_requests_run_concurrently(
         base_url="http://test",
     ) as client:
         tasks = [
-            client.get("/api/agent/greeting")
-            for _ in range(NUM_CONCURRENT_REQUESTS)
+            client.get("/api/agent/greeting") for _ in range(NUM_CONCURRENT_REQUESTS)
         ]
         responses = await asyncio.gather(*tasks)
     elapsed = time.perf_counter() - start
@@ -224,9 +221,9 @@ async def test_greeting_requests_run_concurrently(
         assert r.status_code == 200, r.text
         assert "greeting" in r.json()
 
-    assert elapsed < MAX_WALL_TIME_3, (
-        f"Greeting requests took {elapsed:.2f}s; expect < {MAX_WALL_TIME_3}s if parallel."
-    )
+    assert (
+        elapsed < MAX_WALL_TIME_3
+    ), f"Greeting requests took {elapsed:.2f}s; expect < {MAX_WALL_TIME_3}s if parallel."
 
 
 @pytest.mark.asyncio
@@ -266,4 +263,6 @@ async def test_real_philosopher_agent_concurrent_queries(app_with_real_agent):
         assert r.status_code == 200, f"Request {i}: {r.status_code} {r.text}"
         body = r.json()
         assert "answer" in body, body
-        assert len((body.get("answer") or "").strip()) > 0, f"Empty answer for {questions[i]!r}"
+        assert (
+            len((body.get("answer") or "").strip()) > 0
+        ), f"Empty answer for {questions[i]!r}"

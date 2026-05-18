@@ -3,12 +3,13 @@
 This agent uses OpenAI function calling to orchestrate tool calling with explicit
 reasoning steps via the sequential_thinking tool.
 """
+
 from __future__ import annotations
 
 import json
 import os
 import re
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
 
 from openai import OpenAI
 
@@ -55,13 +56,15 @@ def _strip_trailing_citation_inventory(raw: str) -> str:
 
         # Be conservative: avoid stripping legitimate prose paragraphs that happen to contain
         # many citations. Only strip when it looks like a bibliography/mapping list.
-        has_quotes = any(ch in t for ch in ['"', '“', '”'])
+        has_quotes = any(ch in t for ch in ['"', "“", "”"])
         looks_like_multiline_list = bool(re.search(r"\n\s*\[\d+\]", t))
 
         lower = t.lower()
-        looks_like_sources_header = lower.startswith(("sources", "references", "citations"))
+        looks_like_sources_header = lower.startswith(
+            ("sources", "references", "citations")
+        )
 
-        return (has_quotes or looks_like_multiline_list or looks_like_sources_header)
+        return has_quotes or looks_like_multiline_list or looks_like_sources_header
 
     paras = split_paras(text)
 
@@ -85,8 +88,9 @@ def _strip_trailing_citation_inventory(raw: str) -> str:
 
     return "\n\n".join(paras).rstrip()
 
+
 if TYPE_CHECKING:
-    from .tools import AgentTools, ToolResult
+    from .tools import AgentTools
     from ..rag import CitationBuilder
 
 
@@ -104,17 +108,49 @@ other tool calls to document your reasoning.""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "thought": {"type": "string", "description": "Your current thought or reasoning step"},
-                    "thought_number": {"type": "integer", "description": "Current thought number (1-indexed)"},
-                    "total_thoughts": {"type": "integer", "description": "Estimated total thoughts needed (can increase)"},
-                    "next_thought_needed": {"type": "boolean", "description": "Whether another thought is needed after this"},
-                    "is_revision": {"type": "boolean", "description": "Whether this revises a previous thought"},
-                    "revises_thought": {"type": "integer", "description": "If is_revision, which thought number is being revised"},
-                    "branch_from_thought": {"type": "integer", "description": "If branching, which thought to branch from"},
-                    "branch_id": {"type": "string", "description": "Identifier for this branch"},
-                    "needs_more_thoughts": {"type": "boolean", "description": "Set to true if you need more thoughts"},
+                    "thought": {
+                        "type": "string",
+                        "description": "Your current thought or reasoning step",
+                    },
+                    "thought_number": {
+                        "type": "integer",
+                        "description": "Current thought number (1-indexed)",
+                    },
+                    "total_thoughts": {
+                        "type": "integer",
+                        "description": "Estimated total thoughts needed (can increase)",
+                    },
+                    "next_thought_needed": {
+                        "type": "boolean",
+                        "description": "Whether another thought is needed after this",
+                    },
+                    "is_revision": {
+                        "type": "boolean",
+                        "description": "Whether this revises a previous thought",
+                    },
+                    "revises_thought": {
+                        "type": "integer",
+                        "description": "If is_revision, which thought number is being revised",
+                    },
+                    "branch_from_thought": {
+                        "type": "integer",
+                        "description": "If branching, which thought to branch from",
+                    },
+                    "branch_id": {
+                        "type": "string",
+                        "description": "Identifier for this branch",
+                    },
+                    "needs_more_thoughts": {
+                        "type": "boolean",
+                        "description": "Set to true if you need more thoughts",
+                    },
                 },
-                "required": ["thought", "thought_number", "total_thoughts", "next_thought_needed"],
+                "required": [
+                    "thought",
+                    "thought_number",
+                    "total_thoughts",
+                    "next_thought_needed",
+                ],
             },
         },
     },
@@ -127,7 +163,11 @@ other tool calls to document your reasoning.""",
                 "type": "object",
                 "properties": {
                     "question": {"type": "string"},
-                    "recent_qas": {"type": "array", "items": {"type": "string"}, "description": "Up to 5 recent Q/A pairs as strings"},
+                    "recent_qas": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Up to 5 recent Q/A pairs as strings",
+                    },
                 },
                 "required": ["question", "recent_qas"],
             },
@@ -141,7 +181,10 @@ other tool calls to document your reasoning.""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Original user question"},
+                    "query": {
+                        "type": "string",
+                        "description": "Original user question",
+                    },
                 },
                 "required": ["query"],
             },
@@ -164,7 +207,10 @@ other tool calls to document your reasoning.""",
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query text"},
-                    "limit": {"type": "integer", "description": "Maximum communities to return (default: 5)"},
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum communities to return (default: 5)",
+                    },
                 },
                 "required": ["query"],
             },
@@ -178,7 +224,10 @@ other tool calls to document your reasoning.""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "community_id": {"type": "integer", "description": "Community ID to read"},
+                    "community_id": {
+                        "type": "integer",
+                        "description": "Community ID to read",
+                    },
                 },
                 "required": ["community_id"],
             },
@@ -192,8 +241,15 @@ other tool calls to document your reasoning.""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "community_ids": {"type": "array", "items": {"type": "integer"}, "description": "Community IDs from search_community_reports"},
-                    "limit": {"type": "integer", "description": "Max entity nodes to return (default: 20)"},
+                    "community_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Community IDs from search_community_reports",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max entity nodes to return (default: 20)",
+                    },
                 },
                 "required": ["community_ids"],
             },
@@ -233,10 +289,26 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "authors": {"type": "array", "items": {"type": "string"}, "description": "Author names"},
-                    "titles": {"type": "array", "items": {"type": "string"}, "description": "Work titles"},
-                    "traditions": {"type": "array", "items": {"type": "string"}, "description": "Traditions"},
-                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Domains"},
+                    "authors": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Author names",
+                    },
+                    "titles": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Work titles",
+                    },
+                    "traditions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Traditions",
+                    },
+                    "domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Domains",
+                    },
                 },
             },
         },
@@ -258,7 +330,10 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query text"},
-                    "limit": {"type": "integer", "description": "Maximum chunks to return (default: 15)"},
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum chunks to return (default: 15)",
+                    },
                 },
                 "required": ["query"],
             },
@@ -272,8 +347,15 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "chunk_ids": {"type": "array", "items": {"type": "string"}, "description": "Chunk IDs to extract entities from"},
-                    "query": {"type": "string", "description": "The user's question - used to score entity relevance"},
+                    "chunk_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Chunk IDs to extract entities from",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "The user's question - used to score entity relevance",
+                    },
                 },
                 "required": ["chunk_ids", "query"],
             },
@@ -287,7 +369,11 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "chunk_ids": {"type": "array", "items": {"type": "string"}, "description": "Chunk IDs to retrieve"},
+                    "chunk_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Chunk IDs to retrieve",
+                    },
                 },
                 "required": ["chunk_ids"],
             },
@@ -309,8 +395,14 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "node_id": {"type": "string", "description": "Entity ID to expand. Use exact node_id from get_entities_from_chunks or get_seed_entities_for_communities — NOT community IDs like 'community-9'."},
-                    "max_neighbors": {"type": "integer", "description": "Maximum neighbors to return (default: 10)"},
+                    "node_id": {
+                        "type": "string",
+                        "description": "Entity ID to expand. Use exact node_id from get_entities_from_chunks or get_seed_entities_for_communities — NOT community IDs like 'community-9'.",
+                    },
+                    "max_neighbors": {
+                        "type": "integer",
+                        "description": "Maximum neighbors to return (default: 10)",
+                    },
                 },
                 "required": ["node_id"],
             },
@@ -324,8 +416,14 @@ IMPORTANT: Call list_available_sources first to get valid values.""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "steps": {"type": "integer", "description": "Number of steps to go back (default: 1). Use 0 to see current state without moving."},
-                    "to_node_id": {"type": "string", "description": "Alternatively, specify exact node ID to return to (must be in traversal history)"},
+                    "steps": {
+                        "type": "integer",
+                        "description": "Number of steps to go back (default: 1). Use 0 to see current state without moving.",
+                    },
+                    "to_node_id": {
+                        "type": "string",
+                        "description": "Alternatively, specify exact node ID to return to (must be in traversal history)",
+                    },
                 },
             },
         },
@@ -409,7 +507,7 @@ ROLE_PROMPTS = {
 
 
 SYSTEM_PROMPT = (
-"""You are **Philo**, a scholarly knowledge agent for ethics, metaphysics, epistemology, theology, anthropology, and history.
+    """You are **Philo**, a scholarly knowledge agent for ethics, metaphysics, epistemology, theology, anthropology, and history.
 You reason rigorously, cite evidence, and traverse a knowledge graph of concepts, authors, works, and ideas.
 
 SAFETY & ETHICS (CRITICAL)
@@ -603,8 +701,12 @@ class PhilosopherAgent:
             normalized.append(edge)
         return normalized
 
-    def _ensure_nodes_for_edges(self, nodes: list[dict], edges: list[dict]) -> list[dict]:
-        by_id: dict[str, dict] = {n["id"]: n for n in (nodes or []) if isinstance(n, dict) and n.get("id")}
+    def _ensure_nodes_for_edges(
+        self, nodes: list[dict], edges: list[dict]
+    ) -> list[dict]:
+        by_id: dict[str, dict] = {
+            n["id"]: n for n in (nodes or []) if isinstance(n, dict) and n.get("id")
+        }
         for e in edges or []:
             src = e.get("source")
             tgt = e.get("target")
@@ -660,7 +762,9 @@ class PhilosopherAgent:
             out.append({"source": u, "target": v, "label": label})
         return out
 
-    def _display_edges(self, max_neighbors_per_node: int = 4) -> tuple[list[dict], set[str]]:
+    def _display_edges(
+        self, max_neighbors_per_node: int = 4
+    ) -> tuple[list[dict], set[str]]:
         """Path edges plus up to max_neighbors_per_node one-hop neighbor edges per path node so the graph shows connected structure."""
         path_edge_keys: set[tuple[str, str]] = set()
         for e in self._traversed_edges:
@@ -683,11 +787,13 @@ class PhilosopherAgent:
                         continue
                     path_edge_keys.add((nid_str, tgt))
                     path_edge_keys.add((tgt, nid_str))
-                    display_edges.append({
-                        "source": nid_str,
-                        "target": tgt,
-                        "label": attrs.get("label", _pred),
-                    })
+                    display_edges.append(
+                        {
+                            "source": nid_str,
+                            "target": tgt,
+                            "label": attrs.get("label", _pred),
+                        }
+                    )
                     neighbor_ids.add(tgt)
                     count += 1
         return (display_edges, neighbor_ids)
@@ -695,7 +801,9 @@ class PhilosopherAgent:
     def generate_greeting(self) -> str:
         """Short, varied self-intro inviting the user to ask a question."""
         if not self.llm_client:
-            return "Philo online—I'll walk the graph, cite inline. What should we explore?"
+            return (
+                "Philo online—I'll walk the graph, cite inline. What should we explore?"
+            )
         system_msg = SYSTEM_PROMPT + (
             "\n\nGREET QUICKLY:\n"
             "- Output exactly one sentence, under 22 words.\n"
@@ -765,12 +873,16 @@ class PhilosopherAgent:
         }
 
         if to_phase not in valid_transitions.get(self._current_phase, set()):
-            trace_logger.info(f"[AGENT] ❌ Invalid phase transition: {self._current_phase.value} → {to_phase.value}")
+            trace_logger.info(
+                f"[AGENT] ❌ Invalid phase transition: {self._current_phase.value} → {to_phase.value}"
+            )
             return f"Cannot transition from {self._current_phase.value} to {to_phase.value}"
 
         old_phase = self._current_phase
         self._current_phase = to_phase
-        trace_logger.info(f"[AGENT] 📍 Phase: {old_phase.value.upper()} → {to_phase.value.upper()}")
+        trace_logger.info(
+            f"[AGENT] 📍 Phase: {old_phase.value.upper()} → {to_phase.value.upper()}"
+        )
         return f"Advanced to {to_phase.value} phase"
 
     def _role_system_prompt(self, phase: Phase) -> str | None:
@@ -822,7 +934,9 @@ class PhilosopherAgent:
             verdict = self._llm_followup_check(question, recent)
             if verdict == "in":
                 # continue existing state; jump to traversal if we have a path, else scope
-                self._current_phase = Phase.TRAVERSAL if self._traversal_path else Phase.SCOPE
+                self._current_phase = (
+                    Phase.TRAVERSAL if self._traversal_path else Phase.SCOPE
+                )
                 return "Follow-up detected. Continuing prior context."
             else:
                 self._reset_state()
@@ -870,20 +984,33 @@ class PhilosopherAgent:
             data = result.data
             seeds = data.get("seeds", [])
             lines = [f"- {s['node_id']} | {s['label']}" for s in seeds]
-            return f"{data.get('message', '')}\nSeeds:\n" + "\n".join(lines) if lines else result.message
+            return (
+                f"{data.get('message', '')}\nSeeds:\n" + "\n".join(lines)
+                if lines
+                else result.message
+            )
 
         elif name == "list_available_sources":
-            result = self.agent_tools.list_available_sources(arguments.get("category", "authors"))
+            result = self.agent_tools.list_available_sources(
+                arguments.get("category", "authors")
+            )
             if not result.success:
                 return f"Error: {result.message}"
             items = result.data["items"]
             category = arguments.get("category", "authors")
             if category == "authors":
-                lines = [f"- {item['name']} ({item['chunks']} chunks)" for item in items]
+                lines = [
+                    f"- {item['name']} ({item['chunks']} chunks)" for item in items
+                ]
             elif category == "titles":
-                lines = [f"- {item['title']} by {item['author']} ({item['chunks']} chunks)" for item in items]
+                lines = [
+                    f"- {item['title']} by {item['author']} ({item['chunks']} chunks)"
+                    for item in items
+                ]
             elif category == "traditions":
-                lines = [f"- {item['name']} ({item['chunks']} chunks)" for item in items]
+                lines = [
+                    f"- {item['name']} ({item['chunks']} chunks)" for item in items
+                ]
             elif category == "domains":
                 lines = [f"- {item['name']} ({item['files']} files)" for item in items]
             else:
@@ -899,6 +1026,7 @@ class PhilosopherAgent:
             )
             if result.success:
                 from .scope import Scope
+
                 self._scope = Scope(
                     authors=arguments.get("authors") or [],
                     titles=arguments.get("titles") or [],
@@ -909,7 +1037,9 @@ class PhilosopherAgent:
                 # Apply scope to agent_tools for scoped searches
                 self.agent_tools.set_active_scope(self._scope)
                 scope_logger.info(f"[SCOPE] Set: {self._scope.describe()}")
-                scope_logger.info(f"[SCOPE] Chunks: {result.data.get('chunk_count', '?')} | Texts: {result.data.get('text_count', '?')}")
+                scope_logger.info(
+                    f"[SCOPE] Chunks: {result.data.get('chunk_count', '?')} | Texts: {result.data.get('text_count', '?')}"
+                )
                 self._advance_phase(Phase.RETRIEVAL)
             return result.message + " Advanced to retrieval phase."
 
@@ -937,8 +1067,12 @@ class PhilosopherAgent:
             scoped = result.data.get("scoped", False)
             self._collected_chunks.extend(chunk_ids)
             self._collected_chunks = list(dict.fromkeys(self._collected_chunks))
-            trace_logger.info(f"[AGENT] 🔍 Vector search: {len(chunk_ids)} chunks (scoped={scoped})")
-            lines = [f"- {cid} (score: {score:.3f})" for cid, score in zip(chunk_ids, scores)]
+            trace_logger.info(
+                f"[AGENT] 🔍 Vector search: {len(chunk_ids)} chunks (scoped={scoped})"
+            )
+            lines = [
+                f"- {cid} (score: {score:.3f})" for cid, score in zip(chunk_ids, scores)
+            ]
             return f"Found {len(chunk_ids)} chunks:\n" + "\n".join(lines)
 
         elif name == "search_community_reports":
@@ -955,17 +1089,23 @@ class PhilosopherAgent:
             # Add cited chunks to collected set (they are already scope-filtered if scoped)
             self._collected_chunks.extend(cited)
             self._collected_chunks = list(dict.fromkeys(self._collected_chunks))
-            trace_logger.info(f"[AGENT] 🛰️ Community routing: {len(comm_ids)} communities (scoped={scoped})")
-            self._emit_event({
-                "type": "routing",
-                "communities": comm_ids,
-                "scores": scores,
-            })
+            trace_logger.info(
+                f"[AGENT] 🛰️ Community routing: {len(comm_ids)} communities (scoped={scoped})"
+            )
+            self._emit_event(
+                {
+                    "type": "routing",
+                    "communities": comm_ids,
+                    "scores": scores,
+                }
+            )
             lines = [f"Communities (top {len(comm_ids)}):"]
             for cid, s in zip(comm_ids, scores):
                 lines.append(f"  - community {cid} | score={s:.3f}")
             if cited:
-                lines.append(f"Cited chunks from reports: {len(cited)}. Call get_collected_chunks to list chunk IDs, then get_chunk_content(ids) to read evidence for citations.")
+                lines.append(
+                    f"Cited chunks from reports: {len(cited)}. Call get_collected_chunks to list chunk IDs, then get_chunk_content(ids) to read evidence for citations."
+                )
             return "\n".join(lines)
 
         elif name == "get_entities_from_chunks":
@@ -983,14 +1123,21 @@ class PhilosopherAgent:
                 entity_ids = [e["entity_id"] for e in entities]
                 self._collected_entities.extend(entity_ids)
                 self._collected_entities = list(dict.fromkeys(self._collected_entities))
-                self._emit_event({
-                    "type": "entities",
-                    "entities": entity_ids,
-                })
+                self._emit_event(
+                    {
+                        "type": "entities",
+                        "entities": entity_ids,
+                    }
+                )
 
-                trace_logger.info(f"[AGENT] 🏷️ Extracted {len(entities)} scored entities")
+                trace_logger.info(
+                    f"[AGENT] 🏷️ Extracted {len(entities)} scored entities"
+                )
                 if entities:
-                    top3 = [(e["label"], e["query_relevance"], e["reason"]) for e in entities[:3]]
+                    top3 = [
+                        (e["label"], e["query_relevance"], e["reason"])
+                        for e in entities[:3]
+                    ]
                     trace_logger.info(f"[AGENT]    Top 3: {top3}")
 
                 # Do NOT auto-advance: traversal entry is gated by advance_to_traversal.
@@ -1009,12 +1156,16 @@ class PhilosopherAgent:
                 entity_ids = result.data["entity_ids"]
                 self._collected_entities.extend(entity_ids)
                 self._collected_entities = list(dict.fromkeys(self._collected_entities))
-                trace_logger.info(f"[AGENT] 🏷️ Extracted {len(entity_ids)} entities (unscored)")
+                trace_logger.info(
+                    f"[AGENT] 🏷️ Extracted {len(entity_ids)} entities (unscored)"
+                )
                 # Do NOT auto-advance: traversal entry is gated by advance_to_traversal.
-                self._emit_event({
-                    "type": "entities",
-                    "entities": entity_ids,
-                })
+                self._emit_event(
+                    {
+                        "type": "entities",
+                        "entities": entity_ids,
+                    }
+                )
                 return f"Found {len(entity_ids)} entities (provide query parameter for relevance scoring)."
 
         elif name == "get_chunk_content":
@@ -1063,23 +1214,34 @@ class PhilosopherAgent:
             path_before = len(self._traversal_path)
             if source_id not in self._traversal_path:
                 self._traversal_path.append(source_id)
-                self._traversal_history.append({
-                    "node_id": source_id,
-                    "label": source_label,
-                    "community_id": data.get("community_id"),
-                    "in_scope_neighbors": data.get("in_scope_neighbors", 0),
-                    "step": len(self._traversal_path),
-                })
+                self._traversal_history.append(
+                    {
+                        "node_id": source_id,
+                        "label": source_label,
+                        "community_id": data.get("community_id"),
+                        "in_scope_neighbors": data.get("in_scope_neighbors", 0),
+                        "step": len(self._traversal_path),
+                    }
+                )
             # Only track path edges (actual walk), not every neighbor — avoids graph explosion
             self._traversed_edges = self._path_edges()
-            if len(self._traversal_path) >= 2 and len(self._traversal_path) > path_before:
+            if (
+                len(self._traversal_path) >= 2
+                and len(self._traversal_path) > path_before
+            ):
                 self._new_edges_count += 1
 
             # Build output with scope info
             node_in_scope = data.get("node_in_scope", True)
-            trace_logger.info(f"[AGENT] 🕸️ Expand node: {data['label']} (community={data['community_id']}, in_scope={node_in_scope})")
-            trace_logger.info(f"[AGENT]    Edges: {data.get('total_neighbors', len(data['neighbors']))} total, {data.get('in_scope_neighbors', '?')} in-scope")
-            trace_logger.info(f"[AGENT]    Path: {' → '.join(self._traversal_path[-5:])}")
+            trace_logger.info(
+                f"[AGENT] 🕸️ Expand node: {data['label']} (community={data['community_id']}, in_scope={node_in_scope})"
+            )
+            trace_logger.info(
+                f"[AGENT]    Edges: {data.get('total_neighbors', len(data['neighbors']))} total, {data.get('in_scope_neighbors', '?')} in-scope"
+            )
+            trace_logger.info(
+                f"[AGENT]    Path: {' → '.join(self._traversal_path[-5:])}"
+            )
 
             # Emit path + limited one-hop neighbors per path node (cap to avoid graph explosion)
             display_edges, neighbor_ids = self._display_edges(max_neighbors_per_node=2)
@@ -1092,53 +1254,89 @@ class PhilosopherAgent:
                 if nid_str in seen:
                     continue
                 seen.add(nid_str)
-                node_data = graph.nodes.get(nid_str, {}) if graph is not None and nid_str in graph else {}
-                traversal_nodes.append({
-                    "id": nid_str,
-                    "label": node_data.get("label", nid_str),
-                    "community": node_to_community.get(nid_str),
-                    "degree": graph.degree(nid_str) if graph is not None and nid_str in graph else 0,
-                })
+                node_data = (
+                    graph.nodes.get(nid_str, {})
+                    if graph is not None and nid_str in graph
+                    else {}
+                )
+                traversal_nodes.append(
+                    {
+                        "id": nid_str,
+                        "label": node_data.get("label", nid_str),
+                        "community": node_to_community.get(nid_str),
+                        "degree": (
+                            graph.degree(nid_str)
+                            if graph is not None and nid_str in graph
+                            else 0
+                        ),
+                    }
+                )
             for nid in neighbor_ids:
                 if nid in seen:
                     continue
                 seen.add(nid)
-                node_data = graph.nodes.get(nid, {}) if graph is not None and nid in graph else {}
-                traversal_nodes.append({
-                    "id": nid,
-                    "label": node_data.get("label", nid),
-                    "community": node_to_community.get(nid),
-                    "degree": graph.degree(nid) if graph is not None and nid in graph else 0,
-                })
+                node_data = (
+                    graph.nodes.get(nid, {})
+                    if graph is not None and nid in graph
+                    else {}
+                )
+                traversal_nodes.append(
+                    {
+                        "id": nid,
+                        "label": node_data.get("label", nid),
+                        "community": node_to_community.get(nid),
+                        "degree": (
+                            graph.degree(nid)
+                            if graph is not None and nid in graph
+                            else 0
+                        ),
+                    }
+                )
             if traversal_nodes or display_edges:
                 normalized_edges = self._normalize_edge_list(display_edges)
                 normalized_nodes = self._normalize_node_list(traversal_nodes)
-                normalized_nodes = self._ensure_nodes_for_edges(normalized_nodes, normalized_edges)
-                collected_entities = self._normalize_entity_list(list(self._traversal_path) + list(neighbor_ids))
-                self._emit_event({
-                    "type": "traversal",
-                    "traversal": {"edges": normalized_edges},
-                    "traversal_nodes": normalized_nodes,
-                    "collected_entities": collected_entities,
-                })
+                normalized_nodes = self._ensure_nodes_for_edges(
+                    normalized_nodes, normalized_edges
+                )
+                collected_entities = self._normalize_entity_list(
+                    list(self._traversal_path) + list(neighbor_ids)
+                )
+                self._emit_event(
+                    {
+                        "type": "traversal",
+                        "traversal": {"edges": normalized_edges},
+                        "traversal_nodes": normalized_nodes,
+                        "collected_entities": collected_entities,
+                    }
+                )
 
             lines = [f"Node: {data['label']} (community: {data['community_id']})"]
-            lines.append(f"Traversal position: step {len(self._traversal_path)} | path: {' → '.join(self._traversal_path[-3:])}")
+            lines.append(
+                f"Traversal position: step {len(self._traversal_path)} | path: {' → '.join(self._traversal_path[-3:])}"
+            )
 
             # Warn if node is not in induced subgraph
             if data.get("scope_active") and not node_in_scope:
-                lines.append("⚠️ WARNING: This node is NOT in the scoped induced subgraph - it has no in-scope edges.")
-                lines.append("   Consider using backtrack to return to a previous node.")
+                lines.append(
+                    "⚠️ WARNING: This node is NOT in the scoped induced subgraph - it has no in-scope edges."
+                )
+                lines.append(
+                    "   Consider using backtrack to return to a previous node."
+                )
 
             if data.get("scope_active"):
-                lines.append(f"Total edges: {data['total_neighbors']} ({data['in_scope_neighbors']} in-scope, {data['out_scope_neighbors']} out-of-scope)")
+                lines.append(
+                    f"Total edges: {data['total_neighbors']} ({data['in_scope_neighbors']} in-scope, {data['out_scope_neighbors']} out-of-scope)"
+                )
 
             lines.append(f"Neighbors ({len(data['neighbors'])} shown):")
             for n in data["neighbors"]:
                 scope_marker = "" if n.get("in_scope", True) else " [OUT OF SCOPE]"
-                chunk_info = f"evidence: {n.get('scoped_chunk_count', n['chunk_count'])}"
+                chunk_info = (
+                    f"evidence: {n.get('scoped_chunk_count', n['chunk_count'])}"
+                )
                 score_info = f"score={n.get('traversal_score', '?')}"
-                breakdown = n.get('score_breakdown', '')
+                breakdown = n.get("score_breakdown", "")
                 lines.append(
                     f"  - {n['node_id']} | {score_info} ({breakdown}) | via '{n['predicate']}' | {chunk_info}{scope_marker}"
                 )
@@ -1157,7 +1355,7 @@ class PhilosopherAgent:
                     return f"Error: Node '{to_node_id}' not in traversal history. History: {self._traversal_path}"
                 # Truncate path to that node
                 idx = self._traversal_path.index(to_node_id)
-                self._traversal_path = self._traversal_path[:idx + 1]
+                self._traversal_path = self._traversal_path[: idx + 1]
                 self._current_node = to_node_id
             elif steps == 0:
                 # Just show state without moving
@@ -1169,24 +1367,34 @@ class PhilosopherAgent:
                     self._traversal_path = self._traversal_path[:1]
                 else:
                     self._traversal_path = self._traversal_path[:-steps]
-                self._current_node = self._traversal_path[-1] if self._traversal_path else None
+                self._current_node = (
+                    self._traversal_path[-1] if self._traversal_path else None
+                )
             self._traversed_edges = self._path_edges()
 
             # Build response
             if self._current_node:
                 # Find the history entry for current node
                 current_info = next(
-                    (h for h in self._traversal_history if h["node_id"] == self._current_node),
-                    {"label": self._current_node, "community_id": "?"}
+                    (
+                        h
+                        for h in self._traversal_history
+                        if h["node_id"] == self._current_node
+                    ),
+                    {"label": self._current_node, "community_id": "?"},
                 )
-                trace_logger.info(f"[AGENT] ↩️ Backtrack to: {current_info.get('label', self._current_node)}")
+                trace_logger.info(
+                    f"[AGENT] ↩️ Backtrack to: {current_info.get('label', self._current_node)}"
+                )
                 lines = [
                     f"Backtracked to: {current_info.get('label', self._current_node)} (community: {current_info.get('community_id', '?')})",
                     f"Current path: {' → '.join(self._traversal_path)}",
                     f"You can now expand_node on '{self._current_node}' to see its neighbors again, or explore a different path.",
                 ]
             else:
-                lines = ["Backtracked to start. No current node. Use expand_node to begin traversal."]
+                lines = [
+                    "Backtracked to start. No current node. Use expand_node to begin traversal."
+                ]
 
             return "\n".join(lines)
 
@@ -1264,7 +1472,7 @@ class PhilosopherAgent:
 
             # Transition to DONE (terminal state) - not SYNTHESIS (we're already there)
             self._current_phase = Phase.DONE
-            trace_logger.info(f"[AGENT] 📍 Phase: SYNTHESIS → DONE")
+            trace_logger.info("[AGENT] 📍 Phase: SYNTHESIS → DONE")
             return f"Answer recorded with {len(cited_chunk_ids)} citations. Query complete."
 
         return f"Unknown tool: {name}"
@@ -1310,16 +1518,22 @@ class PhilosopherAgent:
             self._current_phase = Phase.RETRIEVAL
 
         if self._event_handler:
-            self._emit_event({
-                "type": "session",
-                "session_continued": session_continued,
-            })
+            self._emit_event(
+                {
+                    "type": "session",
+                    "session_continued": session_continued,
+                }
+            )
 
         if not self.llm_client:
             raise ValueError("LLM client not provided")
 
-        trace_logger.info(f"[AGENT] ═══════════════════════════════════════════════════════")
-        trace_logger.info(f"[AGENT] Query: {question[:100]}{'...' if len(question) > 100 else ''}")
+        trace_logger.info(
+            "[AGENT] ═══════════════════════════════════════════════════════"
+        )
+        trace_logger.info(
+            f"[AGENT] Query: {question[:100]}{'...' if len(question) > 100 else ''}"
+        )
         trace_logger.info(f"[AGENT] Max iterations: {max_iterations}")
 
         messages = [
@@ -1339,7 +1553,9 @@ class PhilosopherAgent:
                     ),
                 }
             )
-        messages.append({"role": "user", "content": f"Answer this question: {question}"})
+        messages.append(
+            {"role": "user", "content": f"Answer this question: {question}"}
+        )
 
         iteration = 0
         done = False
@@ -1347,7 +1563,9 @@ class PhilosopherAgent:
         while not done and iteration < max_iterations:
             iteration += 1
 
-            trace_logger.info(f"[AGENT] ─── Iteration {iteration} | Phase: {self._current_phase.value.upper()} ───")
+            trace_logger.info(
+                f"[AGENT] ─── Iteration {iteration} | Phase: {self._current_phase.value.upper()} ───"
+            )
 
             role_prompt = self._role_system_prompt(self._current_phase)
             if role_prompt and self._last_role_phase != self._current_phase:
@@ -1357,7 +1575,10 @@ class PhilosopherAgent:
             tools_for_phase = self._tools_for_phase(self._current_phase)
             tool_choice: object = "required"
             if self._forced_tool_choice:
-                tool_choice = {"type": "function", "function": {"name": self._forced_tool_choice}}
+                tool_choice = {
+                    "type": "function",
+                    "function": {"name": self._forced_tool_choice},
+                }
 
             response = self.llm_client.chat.completions.create(
                 model=self.llm_model,
@@ -1378,8 +1599,10 @@ class PhilosopherAgent:
 
                     # Log tool call
                     if func_name == "sequential_thinking":
-                        thought = func_args.get('thought', '')[:150]
-                        trace_logger.info(f"[AGENT] 💭 Thought #{func_args.get('thought_number', '?')}: {thought}{'...' if len(func_args.get('thought', '')) > 150 else ''}")
+                        thought = func_args.get("thought", "")[:150]
+                        trace_logger.info(
+                            f"[AGENT] 💭 Thought #{func_args.get('thought_number', '?')}: {thought}{'...' if len(func_args.get('thought', '')) > 150 else ''}"
+                        )
                         saw_thought = True
                     else:
                         args_str = json.dumps(func_args, default=str)[:100]
@@ -1391,17 +1614,21 @@ class PhilosopherAgent:
                     # Log result summary
                     result_preview = result[:200] if len(result) > 200 else result
                     if func_name != "sequential_thinking":
-                        trace_logger.tool_result(func_name, result=result_preview.replace('\n', ' ')[:150])
+                        trace_logger.tool_result(
+                            func_name, result=result_preview.replace("\n", " ")[:150]
+                        )
 
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": result,
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": result,
+                        }
+                    )
 
                     # Check if we're done (either by name or phase)
                     if self._current_phase == Phase.DONE:
-                        trace_logger.info(f"[AGENT] ✅ Synthesis complete")
+                        trace_logger.info("[AGENT] ✅ Synthesis complete")
                         done = True
                         break
 
@@ -1414,43 +1641,52 @@ class PhilosopherAgent:
                         if rec:
                             self._forced_tool_choice = rec
                         allowed_actions = sorted(
-                            set(PHASE_TOOLS.get(self._current_phase, set())) - {"sequential_thinking"}
+                            set(PHASE_TOOLS.get(self._current_phase, set()))
+                            - {"sequential_thinking"}
                         )
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                "You are stuck. In your NEXT message you MUST call one action tool. "
-                                f"Allowed action tools in this phase: {allowed_actions}. "
-                                "Do not call sequential_thinking until after you have taken an action."
-                            ),
-                        })
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "You are stuck. In your NEXT message you MUST call one action tool. "
+                                    f"Allowed action tools in this phase: {allowed_actions}. "
+                                    "Do not call sequential_thinking until after you have taken an action."
+                                ),
+                            }
+                        )
                     else:
                         # Any action resets stall forcing
                         self._thought_only_streak = 0
                         self._forced_tool_choice = None
             else:
                 # No tool calls - model wants to respond directly
-                trace_logger.info(f"[AGENT] ⚠️ No tool call from model")
+                trace_logger.info("[AGENT] ⚠️ No tool call from model")
 
                 # If we have an answer, we're done
                 if self._final_answer:
                     done = True
                 else:
                     # Prompt the model to continue
-                    messages.append({
-                        "role": "user",
-                        "content": "Please continue by calling the appropriate tool. Remember to use sequential_thinking to document your reasoning.",
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "Please continue by calling the appropriate tool. Remember to use sequential_thinking to document your reasoning.",
+                        }
+                    )
 
         # Build traversal node metadata: only path + neighbors from display edges (avoid graph explosion).
         # If the agent never traversed, derive a small set from cited chunks for evidence nodes.
-        display_edges, display_neighbor_ids = self._display_edges(max_neighbors_per_node=2)
+        display_edges, display_neighbor_ids = self._display_edges(
+            max_neighbors_per_node=2
+        )
         traversal_node_ids = set(self._traversal_path) | display_neighbor_ids
         for e in display_edges:
             traversal_node_ids.add(e.get("source"))
             traversal_node_ids.add(e.get("target"))
         if not traversal_node_ids and self._collected_chunks:
-            result = self.agent_tools.get_entities_from_chunks(self._collected_chunks, query="")
+            result = self.agent_tools.get_entities_from_chunks(
+                self._collected_chunks, query=""
+            )
             if result.success and result.data.get("entity_ids"):
                 for eid in result.data["entity_ids"][:15]:
                     traversal_node_ids.add(eid)
@@ -1462,18 +1698,24 @@ class PhilosopherAgent:
                 if nid is None:
                     continue
                 nid_str = str(nid)
-                node_data = G.nodes.get(nid_str, {}) if G is not None and nid_str in G else {}
-                traversal_nodes_meta.append({
-                    "id": nid_str,
-                    "label": node_data.get("label", nid_str),
-                    "community": community_map.get(nid_str),
-                    "degree": G.degree(nid_str) if G is not None and nid_str in G else 0,
-                })
+                node_data = (
+                    G.nodes.get(nid_str, {}) if G is not None and nid_str in G else {}
+                )
+                traversal_nodes_meta.append(
+                    {
+                        "id": nid_str,
+                        "label": node_data.get("label", nid_str),
+                        "community": community_map.get(nid_str),
+                        "degree": (
+                            G.degree(nid_str) if G is not None and nid_str in G else 0
+                        ),
+                    }
+                )
 
         # Build response
         citations_data = []
         if self._citations:
-            if hasattr(self._citations[0], 'to_dict'):
+            if hasattr(self._citations[0], "to_dict"):
                 citations_data = [c.to_dict() for c in self._citations]
             else:
                 citations_data = [{"chunk_id": cid} for cid in self._citations]
@@ -1485,20 +1727,27 @@ class PhilosopherAgent:
         # Use path + limited one-hop neighbor edges (same display_edges as above, keeps node set small)
         normalized_edges = self._normalize_edge_list(display_edges)
         normalized_nodes = self._normalize_node_list(traversal_nodes_meta)
-        normalized_nodes = self._ensure_nodes_for_edges(normalized_nodes, normalized_edges)
+        normalized_nodes = self._ensure_nodes_for_edges(
+            normalized_nodes, normalized_edges
+        )
         # Send all node IDs we have (traversal + derived from chunks) so the graph can highlight evidence
         normalized_entities = self._normalize_entity_list(list(traversal_node_ids))
 
         return {
-            "answer": self._final_answer or "No answer was synthesized within the iteration limit.",
+            "answer": self._final_answer
+            or "No answer was synthesized within the iteration limit.",
             "citations": citations_data,
             "phase": self._current_phase.value,
-            "scope": {
-                "authors": self._scope.authors if self._scope else [],
-                "titles": self._scope.titles if self._scope else [],
-                "traditions": self._scope.traditions if self._scope else [],
-                "domains": self._scope.domains if self._scope else [],
-            } if self._scope else None,
+            "scope": (
+                {
+                    "authors": self._scope.authors if self._scope else [],
+                    "titles": self._scope.titles if self._scope else [],
+                    "traditions": self._scope.traditions if self._scope else [],
+                    "domains": self._scope.domains if self._scope else [],
+                }
+                if self._scope
+                else None
+            ),
             "collected_chunks": self._collected_chunks,
             "collected_entities": normalized_entities,
             "traversal": {
@@ -1537,15 +1786,17 @@ class PhilosopherAgent:
             # TODO: Implement true streaming with OpenAI streaming API
             result = self.query(question, max_iterations)
 
-            on_event({
-                "type": "complete",
-                "answer": result.get("answer"),
-                "citations": result.get("citations", []),
-                "traversal": result.get("traversal", {}),
-                "traversal_nodes": result.get("traversal_nodes", []),
-                "collected_entities": result.get("collected_entities", []),
-                "session_continued": result.get("session_continued", False),
-            })
+            on_event(
+                {
+                    "type": "complete",
+                    "answer": result.get("answer"),
+                    "citations": result.get("citations", []),
+                    "traversal": result.get("traversal", {}),
+                    "traversal_nodes": result.get("traversal_nodes", []),
+                    "collected_entities": result.get("collected_entities", []),
+                    "session_continued": result.get("session_continued", False),
+                }
+            )
             return result
         finally:
             self._event_handler = None
@@ -1560,17 +1811,41 @@ class PhilosopherAgent:
         if any(q.startswith(p) and len(q.split()) <= 3 for p in trivial_prefixes):
             return True
         off_domain_phrases = [
-            "buy me a car", "order me a pizza", "book me a flight", "rent a car",
-            "buy me", "price of a car", "i want a car", "want a car", "need a car",
-            "buy a car", "purchase a car", "rent a car", "lease a car",
-            "book a flight", "book flight", "plane ticket", "plane tickets",
-            "order pizza", "buy pizza"
+            "buy me a car",
+            "order me a pizza",
+            "book me a flight",
+            "rent a car",
+            "buy me",
+            "price of a car",
+            "i want a car",
+            "want a car",
+            "need a car",
+            "buy a car",
+            "purchase a car",
+            "rent a car",
+            "lease a car",
+            "book a flight",
+            "book flight",
+            "plane ticket",
+            "plane tickets",
+            "order pizza",
+            "buy pizza",
         ]
         if any(p in q for p in off_domain_phrases):
             return True
         # Short commercial-intent queries with vehicle/booking terms
         car_tokens = {"car", "cars", "auto", "vehicle"}
-        intent_tokens = {"buy", "purchase", "rent", "lease", "need", "want", "order", "book", "price"}
+        intent_tokens = {
+            "buy",
+            "purchase",
+            "rent",
+            "lease",
+            "need",
+            "want",
+            "order",
+            "book",
+            "price",
+        }
         words = q.split()
         if len(words) <= 8 and car_tokens & set(words) and intent_tokens & set(words):
             return True
@@ -1678,9 +1953,8 @@ class PhilosopherAgent:
                 messages=[
                     {
                         "role": "system",
-                        "content": SYSTEM_PROMPT
-                        + "\n\nOUT-OF-SCOPE HANDOFF:\n"
-                        "Politely decline and redirect to topics in scope. One or two short sentences. No citations, no markdown."
+                        "content": SYSTEM_PROMPT + "\n\nOUT-OF-SCOPE HANDOFF:\n"
+                        "Politely decline and redirect to topics in scope. One or two short sentences. No citations, no markdown.",
                     },
                     {"role": "user", "content": question[:500]},
                 ],
@@ -1701,12 +1975,22 @@ class PhilosopherAgent:
         # Heuristic: clear anaphora to prior answer (e.g. "this partnership", "that connection") → follow-up
         q_lower = (question or "").strip().lower()
         anaphora_patterns = (
-            "this partnership", "that partnership", "the partnership",
-            "this connection", "that connection", "the connection",
-            "this relationship", "that relationship",
-            "this idea", "that idea", "the above",
-            "this concept", "that concept", "more aware of this",
-            "that discussion", "this discussion",
+            "this partnership",
+            "that partnership",
+            "the partnership",
+            "this connection",
+            "that connection",
+            "the connection",
+            "this relationship",
+            "that relationship",
+            "this idea",
+            "that idea",
+            "the above",
+            "this concept",
+            "that concept",
+            "more aware of this",
+            "that discussion",
+            "this discussion",
         )
         if any(p in q_lower for p in anaphora_patterns):
             return "in"
@@ -1727,7 +2011,10 @@ class PhilosopherAgent:
                             "OUT = clearly a new, unrelated topic. When in doubt, prefer IN if the question could refer to the prior answer."
                         ),
                     },
-                    {"role": "user", "content": f"Previous QAs:\n{context}\n\nNew question:\n{question}"},
+                    {
+                        "role": "user",
+                        "content": f"Previous QAs:\n{context}\n\nNew question:\n{question}",
+                    },
                 ],
                 max_tokens=3,
                 temperature=0,

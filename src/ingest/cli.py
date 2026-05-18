@@ -1,4 +1,5 @@
 """CLI for running the ingestion pipeline."""
+
 from __future__ import annotations
 
 import argparse
@@ -11,7 +12,7 @@ from .agents import CleaningAgent, CorpusAuditAgent
 from .canonicalizer import EntityCanonicalizer
 from .chunker import CorpusChunker
 from .cleaner import TripleCleaner
-from .config import IngestConfig, load_ingest_config
+from .config import load_ingest_config
 from .embedder import ChunkEmbedder
 from .extractor import TripleExtractor
 from .loader import CorpusLoader
@@ -28,7 +29,9 @@ def _build_openai_client():
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is required for this step")
+        raise ValueError(
+            "OPENAI_API_KEY environment variable is required for this step"
+        )
     return OpenAI(api_key=api_key)
 
 
@@ -47,32 +50,75 @@ Examples:
 
     parser.add_argument("--db", required=True, help="Path to DuckDB database")
     parser.add_argument("--config", help="Optional config JSON to load")
-    parser.add_argument("--save-config", help="Optional config JSON path to persist the active config")
+    parser.add_argument(
+        "--save-config", help="Optional config JSON path to persist the active config"
+    )
 
-    parser.add_argument("--all", action="store_true", help="Run the full 8-step ingestion pipeline")
-    parser.add_argument("--load", action="store_true", help="Load raw files into DuckDB")
+    parser.add_argument(
+        "--all", action="store_true", help="Run the full 8-step ingestion pipeline"
+    )
+    parser.add_argument(
+        "--load", action="store_true", help="Load raw files into DuckDB"
+    )
     parser.add_argument("--audit", action="store_true", help="Run corpus audit agent")
     parser.add_argument("--chunk", action="store_true", help="Chunk raw texts")
     parser.add_argument("--extract", action="store_true", help="Extract typed triples")
-    parser.add_argument("--clean", action="store_true", help="Run dynamic cleaning agent + cleaner")
-    parser.add_argument("--canonicalize", action="store_true", help="Canonicalize entities and predicates")
-    parser.add_argument("--embed", action="store_true", help="Embed chunks and entities")
+    parser.add_argument(
+        "--clean", action="store_true", help="Run dynamic cleaning agent + cleaner"
+    )
+    parser.add_argument(
+        "--canonicalize",
+        action="store_true",
+        help="Canonicalize entities and predicates",
+    )
+    parser.add_argument(
+        "--embed", action="store_true", help="Embed chunks and entities"
+    )
     parser.add_argument("--communities", action="store_true", help="Detect communities")
-    parser.add_argument("--reports", action="store_true", help="Generate community reports")
-    parser.add_argument("--dry-run", action="store_true", help="Preview without making changes")
+    parser.add_argument(
+        "--reports", action="store_true", help="Generate community reports"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview without making changes"
+    )
 
-    parser.add_argument("--ocr", action="store_true", help="Enable Tesseract OCR for scanned/image PDFs")
+    parser.add_argument(
+        "--ocr", action="store_true", help="Enable Tesseract OCR for scanned/image PDFs"
+    )
     parser.add_argument("--extraction-model", help="Override extraction model name")
     parser.add_argument("--embedding-model", help="Override embedding model name")
-    parser.add_argument("--chunk-method", choices=["paragraph", "semantic"], help="Override chunking method")
-    parser.add_argument("--extract-limit", type=int, help="Optional extraction chunk limit")
+    parser.add_argument(
+        "--chunk-method",
+        choices=["paragraph", "semantic"],
+        help="Override chunking method",
+    )
+    parser.add_argument(
+        "--extract-limit", type=int, help="Optional extraction chunk limit"
+    )
 
-    parser.add_argument("--resolution", type=float, default=None, help="Leiden resolution override")
-    parser.add_argument("--min-edge-weight", type=int, default=None, help="Min edge support for clustering")
-    parser.add_argument("--resolution-sweep", action="store_true", help="Run resolution sweep comparison")
-    parser.add_argument("--no-summarize", action="store_true", help="Skip LLM community summaries")
-    parser.add_argument("--min-report-size", type=int, default=20, help="Min community size for reports")
-    parser.add_argument("--max-reports", type=int, default=200, help="Max community reports")
+    parser.add_argument(
+        "--resolution", type=float, default=None, help="Leiden resolution override"
+    )
+    parser.add_argument(
+        "--min-edge-weight",
+        type=int,
+        default=None,
+        help="Min edge support for clustering",
+    )
+    parser.add_argument(
+        "--resolution-sweep",
+        action="store_true",
+        help="Run resolution sweep comparison",
+    )
+    parser.add_argument(
+        "--no-summarize", action="store_true", help="Skip LLM community summaries"
+    )
+    parser.add_argument(
+        "--min-report-size", type=int, default=20, help="Min community size for reports"
+    )
+    parser.add_argument(
+        "--max-reports", type=int, default=200, help="Max community reports"
+    )
 
     args = parser.parse_args()
     setup_logging()
@@ -112,7 +158,14 @@ Examples:
                 print(loader.load_resources())
 
         llm_client = None
-        needs_openai = run_audit or run_clean or run_canonicalize or run_embed or run_communities or run_reports
+        needs_openai = (
+            run_audit
+            or run_clean
+            or run_canonicalize
+            or run_embed
+            or run_communities
+            or run_reports
+        )
         if needs_openai and not args.dry_run:
             llm_client = _build_openai_client()
 
@@ -146,7 +199,9 @@ Examples:
 
         if run_clean:
             _step("STEP 4: Dynamic Clean")
-            cleaning_agent = CleaningAgent(storage, llm_client=llm_client, config=config)
+            cleaning_agent = CleaningAgent(
+                storage, llm_client=llm_client, config=config
+            )
             config, rules = cleaning_agent.run()
             print(
                 {
@@ -166,7 +221,9 @@ Examples:
             if args.dry_run:
                 print("⏭️  Skipping in dry-run mode")
             else:
-                canonicalizer = EntityCanonicalizer(storage, llm_client=llm_client, config=config)
+                canonicalizer = EntityCanonicalizer(
+                    storage, llm_client=llm_client, config=config
+                )
                 canonicalizer.canonicalize_all()
 
         if run_embed:
@@ -181,7 +238,9 @@ Examples:
         G = None
         cluster_G = None
         node_to_community = None
-        if (run_communities or run_reports or args.resolution_sweep) and not args.dry_run:
+        if (
+            run_communities or run_reports or args.resolution_sweep
+        ) and not args.dry_run:
             from ..graph import GraphBuilder
 
             builder = GraphBuilder(storage)
@@ -262,7 +321,9 @@ Examples:
 
         print("\n📊 Database Summary:")
         for (table_name,) in storage.con.execute("SHOW TABLES").fetchall():
-            count = storage.con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+            count = storage.con.execute(
+                f"SELECT COUNT(*) FROM {table_name}"
+            ).fetchone()[0]
             print(f"   {table_name}: {count:,} rows")
     finally:
         storage.close()

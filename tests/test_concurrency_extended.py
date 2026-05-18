@@ -5,6 +5,7 @@ DB contention, and latency budgets.
 Strategies 1–4 are deterministic unit/integration. 5–6 are performance/soak
 and run only with RUN_LIVE_INTEGRATION=1 or RUN_PERF_TESTS=1.
 """
+
 import asyncio
 import time
 from unittest.mock import MagicMock
@@ -16,10 +17,7 @@ from test_concurrency import (
     MOCK_AGENT_SLEEP,
     _live_env_ready,
     _mock_query_result,
-    app_with_mock_agent,
-    app_with_real_agent,
 )
-
 
 # --- 1) Thread-safety of shared agent state ---
 
@@ -72,11 +70,13 @@ async def test_per_request_agent_no_state_leakage(app_with_mock_agent, monkeypat
         answer = body.get("answer") or ""
         my_q = questions[i]
         others = [questions[j] for j in range(len(questions)) if j != i]
-        assert f"[{my_q}]" in answer, f"Response {i} should contain own question {my_q!r}, got {answer!r}"
+        assert (
+            f"[{my_q}]" in answer
+        ), f"Response {i} should contain own question {my_q!r}, got {answer!r}"
         for other in others:
-            assert f"[{other}]" not in answer, (
-                f"State leakage: response for {my_q!r} contained other question {other!r}"
-            )
+            assert (
+                f"[{other}]" not in answer
+            ), f"State leakage: response for {my_q!r} contained other question {other!r}"
 
 
 @pytest.fixture
@@ -113,7 +113,9 @@ async def test_shared_agent_exhibits_leakage(
     """
     from src.api import main as api_main
 
-    monkeypatch.setattr(api_main, "_create_philosopher_agent", lambda: shared_mock_agent)
+    monkeypatch.setattr(
+        api_main, "_create_philosopher_agent", lambda: shared_mock_agent
+    )
 
     questions = ["Alpha", "Beta", "Gamma"]
     transport = httpx.ASGITransport(app=app_with_mock_agent)
@@ -244,7 +246,9 @@ def test_rate_limiting_placeholder():
 
 @pytest.mark.asyncio
 @pytest.mark.caching
-async def test_caching_identical_requests_current_behavior(app_with_mock_agent, monkeypatch):
+async def test_caching_identical_requests_current_behavior(
+    app_with_mock_agent, monkeypatch
+):
     """
     Caching: current API has no response cache. Two identical requests
     both hit the agent. When caching is added, assert second request
@@ -327,7 +331,8 @@ async def test_db_contention_mock_many_concurrent_requests(
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     success = sum(
-        1 for r in results
+        1
+        for r in results
         if not isinstance(r, Exception) and getattr(r, "status_code", 0) == 200
     )
     for r in results:
@@ -341,9 +346,9 @@ async def test_db_contention_mock_many_concurrent_requests(
             assert "database locked" not in detail.lower(), detail
             assert "timeout" not in detail.lower(), detail
 
-    assert success >= concurrency * DB_CONTENTION_SUCCESS_RATE, (
-        f"Success rate {success}/{concurrency} below {DB_CONTENTION_SUCCESS_RATE*100:.0f}%"
-    )
+    assert (
+        success >= concurrency * DB_CONTENTION_SUCCESS_RATE
+    ), f"Success rate {success}/{concurrency} below {DB_CONTENTION_SUCCESS_RATE*100:.0f}%"
 
 
 @pytest.mark.asyncio
@@ -356,9 +361,7 @@ async def test_db_contention_under_load_real_db(app_with_real_agent):
     acceptable success rate. Run with RUN_LIVE_INTEGRATION=1.
     """
     if not _live_env_ready():
-        pytest.skip(
-            "Set RUN_LIVE_INTEGRATION=1 and have OPENAI_API_KEY, PHILOSOPH_DB"
-        )
+        pytest.skip("Set RUN_LIVE_INTEGRATION=1 and have OPENAI_API_KEY, PHILOSOPH_DB")
 
     concurrency = DB_CONTENTION_CONCURRENCY
     questions = [f"Contention question {i}?" for i in range(concurrency)]
@@ -378,10 +381,15 @@ async def test_db_contention_under_load_real_db(app_with_real_agent):
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     success = sum(
-        1 for r in results
+        1
+        for r in results
         if not isinstance(r, Exception) and getattr(r, "status_code", 0) == 200
     )
-    errors = [r for r in results if isinstance(r, Exception) or getattr(r, "status_code", 0) != 200]
+    errors = [
+        r
+        for r in results
+        if isinstance(r, Exception) or getattr(r, "status_code", 0) != 200
+    ]
     for e in errors:
         if isinstance(e, Exception):
             raise AssertionError(f"Request failed: {e}") from e
@@ -393,9 +401,9 @@ async def test_db_contention_under_load_real_db(app_with_real_agent):
         assert "database locked" not in detail.lower(), detail
         assert "timeout" not in detail.lower(), detail
 
-    assert success >= concurrency * DB_CONTENTION_SUCCESS_RATE, (
-        f"Success rate {success}/{concurrency} below {DB_CONTENTION_SUCCESS_RATE*100:.0f}%; errors: {errors}"
-    )
+    assert (
+        success >= concurrency * DB_CONTENTION_SUCCESS_RATE
+    ), f"Success rate {success}/{concurrency} below {DB_CONTENTION_SUCCESS_RATE*100:.0f}%; errors: {errors}"
 
 
 # --- 6) E2E latency (p50/p95/p99 budgets) ---
@@ -428,6 +436,7 @@ async def test_e2e_latency_p95_budget_mock(app_with_mock_agent, monkeypatch):
         transport=transport,
         base_url="http://test",
     ) as client:
+
         async def timed_post(i):
             start = time.perf_counter()
             r = await client.post(
@@ -444,9 +453,17 @@ async def test_e2e_latency_p95_budget_mock(app_with_mock_agent, monkeypatch):
 
     latencies_ms.sort()
     p50 = latencies_ms[len(latencies_ms) // 2]
-    p95 = latencies_ms[int(len(latencies_ms) * 0.95)] if len(latencies_ms) > 1 else latencies_ms[0]
-    p99 = latencies_ms[int(len(latencies_ms) * 0.99)] if len(latencies_ms) > 1 else latencies_ms[0]
-
-    assert p95 <= LATENCY_P95_BUDGET_MS, (
-        f"p95 latency {p95:.0f}ms exceeds budget {LATENCY_P95_BUDGET_MS}ms (p50={p50:.0f}, p99={p99:.0f})"
+    p95 = (
+        latencies_ms[int(len(latencies_ms) * 0.95)]
+        if len(latencies_ms) > 1
+        else latencies_ms[0]
     )
+    p99 = (
+        latencies_ms[int(len(latencies_ms) * 0.99)]
+        if len(latencies_ms) > 1
+        else latencies_ms[0]
+    )
+
+    assert (
+        p95 <= LATENCY_P95_BUDGET_MS
+    ), f"p95 latency {p95:.0f}ms exceeds budget {LATENCY_P95_BUDGET_MS}ms (p50={p50:.0f}, p99={p99:.0f})"

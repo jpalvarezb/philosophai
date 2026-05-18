@@ -1,14 +1,15 @@
 """Fuse and rerank results from vector search and graph traversal."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from ..config.logging import trace_logger, TRACE_VERBOSE, TRACE_MAX_ITEMS
 
 if TYPE_CHECKING:
     from ..storage import DuckDBStorage
     from ..schema import TraversalTrace
-    from .vector import VectorSearchResult, CommunityReportSearchResult
+    from .vector import VectorSearchResult
 
 
 # Default config for context selection
@@ -20,6 +21,7 @@ MUST_KEEP_TRAVERSAL_CHUNKS = 12
 @dataclass
 class FusedResult:
     """Combined results from vector search + graph traversal."""
+
     chunk_ids: list[str]  # Ordered by relevance
     chunk_scores: dict[str, float]  # chunk_id -> score
     chunk_sources: dict[str, str]  # chunk_id -> "vector" | "graph" | "both"
@@ -47,12 +49,12 @@ class ResultFusion:
     ) -> FusedResult:
         """
         Combine vector search results with graph traversal results.
-        
+
         Args:
             vector_result: Results from VectorSearch
             trace: TraversalTrace from graph traversal (or None)
             max_chunks: Maximum chunks to keep
-        
+
         Returns:
             FusedResult with deduplicated, scored chunks
         """
@@ -108,11 +110,11 @@ class ResultFusion:
     ) -> list[tuple[str, str]]:
         """
         Fetch actual chunk content for LLM context.
-        
+
         Args:
             fused: FusedResult from fusion
             limit: Max chunks to send to LLM
-        
+
         Returns:
             List of (chunk_id, content) tuples
         """
@@ -133,13 +135,13 @@ class ResultFusion:
     ) -> tuple[list[str], dict[str, float]]:
         """
         Select final context chunks for LLM, with must-keep guarantees.
-        
+
         Priority:
         1. Must-keep: top report-cited chunks
         2. Must-keep: top traversal-scored chunks
         3. Fill: vector search chunks by similarity
         4. Fill: remaining traversal chunks
-        
+
         Args:
             query: Original question
             report_cited_chunks: Chunks cited by community reports
@@ -150,14 +152,14 @@ class ResultFusion:
             max_context: Maximum chunks for LLM context
             must_keep_report: Guaranteed report chunk slots
             must_keep_traversal: Guaranteed traversal chunk slots
-        
+
         Returns:
             (context_chunk_ids, chunk_scores) - ordered list and score dict
         """
         selected: list[str] = []
         scores: dict[str, float] = {}
         seen: set[str] = set()
-        
+
         def add_chunk(chunk_id: str, score: float, source: str) -> bool:
             """Add chunk if not seen and under limit."""
             if chunk_id in seen or len(selected) >= max_context:
@@ -166,16 +168,16 @@ class ResultFusion:
             scores[chunk_id] = score
             seen.add(chunk_id)
             return True
-        
+
         # 1. Must-keep: top report-cited chunks
         for i, chunk_id in enumerate(report_cited_chunks[:must_keep_report]):
             score = 1.0 - (i * 0.05)  # Decay by position
             add_chunk(chunk_id, score, "report")
-        
+
         # 2. Must-keep: top traversal chunks by score
         traversal_sorted = sorted(
             [(cid, traversal_chunk_scores.get(cid, 0)) for cid in traversal_chunks],
-            key=lambda x: -x[1]
+            key=lambda x: -x[1],
         )
         added_traversal = 0
         for chunk_id, score in traversal_sorted:
@@ -183,20 +185,20 @@ class ResultFusion:
                 break
             if add_chunk(chunk_id, score, "traversal"):
                 added_traversal += 1
-        
+
         # 3. Fill: vector search chunks (already ranked by similarity)
         for i, chunk_id in enumerate(vector_search_chunks):
             if len(selected) >= max_context:
                 break
             score = 0.8 - (i * 0.02)  # Decay by position
             add_chunk(chunk_id, score, "vector")
-        
+
         # 4. Fill: remaining traversal chunks
         for chunk_id, score in traversal_sorted:
             if len(selected) >= max_context:
                 break
             add_chunk(chunk_id, score * 0.8, "traversal_fill")
-        
+
         return selected, scores
 
     def get_context_with_selection(
@@ -209,14 +211,14 @@ class ResultFusion:
     ) -> tuple[list[tuple[str, str]], list[str], dict[str, float]]:
         """
         High-level method: select context and fetch content.
-        
+
         Args:
             query: Original question
             report_cited_chunks: Chunks from community reports (already scope-filtered)
             vector_chunks: Chunks from vector search (already scope-filtered)
             trace: TraversalTrace with collected chunks (already scope-filtered)
             max_context: Maximum chunks for LLM context
-        
+
         Returns:
             (context_texts, all_collected_ids, context_scores)
             - context_texts: [(chunk_id, content), ...] for LLM
@@ -226,7 +228,7 @@ class ResultFusion:
         # Gather all collected chunks (for UI)
         all_collected = set(vector_chunks)
         all_collected.update(report_cited_chunks)
-        
+
         traversal_chunks = []
         traversal_scores = {}
         if trace:
@@ -236,8 +238,10 @@ class ResultFusion:
             for step in trace.steps:
                 for chunk_id in step.chunk_ids:
                     if chunk_id not in traversal_scores:
-                        traversal_scores[chunk_id] = max(0.5, 1.0 - step.step_number * 0.02)
-        
+                        traversal_scores[chunk_id] = max(
+                            0.5, 1.0 - step.step_number * 0.02
+                        )
+
         # Select context
         context_ids, context_scores = self.select_context_chunks(
             query=query,
@@ -253,7 +257,7 @@ class ResultFusion:
         )
         if TRACE_VERBOSE:
             trace_logger.debug(f"context_ids_top={context_ids[:TRACE_MAX_ITEMS]}")
-        
+
         # Fetch content
         trace_logger.tool_call(
             "storage.get_chunk_texts",
@@ -264,5 +268,5 @@ class ResultFusion:
             "storage.get_chunk_texts",
             count=len(context_texts),
         )
-        
+
         return context_texts, list(all_collected), context_scores

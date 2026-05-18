@@ -3,13 +3,14 @@
 Exercises Load -> Audit -> Chunk -> Extract -> Clean with mocked LLM
 responses and verifies database state after each step.
 """
+
 from __future__ import annotations
 
 import json
 import re
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -25,7 +26,6 @@ from src.ingest.extractor import (
 )
 from src.ingest.loader import CorpusLoader
 from src.storage import DuckDBStorage
-
 
 SAMPLE_TEXTS = {
     "0001_Republic_Plato.txt": (
@@ -58,50 +58,58 @@ def _build_mock_llm_client(extraction_config: IngestConfig) -> MagicMock:
     """Build a mock OpenAI client whose .chat.completions.create returns
     different responses depending on the system prompt content."""
 
-    audit_response = _make_mock_response({
-        "chunk_max_chars": 1800,
-        "chunk_overlap": 300,
-        "chunk_method": "paragraph",
-        "boilerplate_patterns": [r"^Page\s+\d+$"],
-        "discovered_subtypes": {"Person": ["Ancient Greek Philosopher"]},
-        "findings": ["Corpus consists of classical philosophical texts."],
-    })
+    audit_response = _make_mock_response(
+        {
+            "chunk_max_chars": 1800,
+            "chunk_overlap": 300,
+            "chunk_method": "paragraph",
+            "boilerplate_patterns": [r"^Page\s+\d+$"],
+            "discovered_subtypes": {"Person": ["Ancient Greek Philosopher"]},
+            "findings": ["Corpus consists of classical philosophical texts."],
+        }
+    )
 
-    cleaning_response = _make_mock_response({
-        "entity_patterns": ["%gutenberg%", "%ebook%"],
-        "predicate_patterns": ["%appears on page%"],
-        "type_rules": {},
-        "explanations": {
-            "%gutenberg%": "Project Gutenberg metadata",
-            "%ebook%": "eBook boilerplate",
-        },
-    })
+    cleaning_response = _make_mock_response(
+        {
+            "entity_patterns": ["%gutenberg%", "%ebook%"],
+            "predicate_patterns": ["%appears on page%"],
+            "type_rules": {},
+            "explanations": {
+                "%gutenberg%": "Project Gutenberg metadata",
+                "%ebook%": "eBook boilerplate",
+            },
+        }
+    )
 
-    validation_keep = _make_mock_response({"keep": True, "rationale": "Clearly corpus metadata noise."})
+    validation_keep = _make_mock_response(
+        {"keep": True, "rationale": "Clearly corpus metadata noise."}
+    )
 
     def _extraction_response_for(chunks: list[dict]) -> MagicMock:
         """Build a plausible extraction response for given chunk IDs."""
         result_chunks = []
         for chunk_info in chunks:
-            result_chunks.append({
-                "chunk_id": chunk_info["id"],
-                "triples": [
-                    {
-                        "subject": "Plato",
-                        "subject_type": "Person",
-                        "predicate": "argues_for",
-                        "object": "justice",
-                        "object_type": "Concept",
-                    },
-                    {
-                        "subject": "virtue",
-                        "subject_type": "Concept",
-                        "predicate": "is_excellence_of",
-                        "object": "soul",
-                        "object_type": "Concept",
-                    },
-                ],
-            })
+            result_chunks.append(
+                {
+                    "chunk_id": chunk_info["id"],
+                    "triples": [
+                        {
+                            "subject": "Plato",
+                            "subject_type": "Person",
+                            "predicate": "argues_for",
+                            "object": "justice",
+                            "object_type": "Concept",
+                        },
+                        {
+                            "subject": "virtue",
+                            "subject_type": "Concept",
+                            "predicate": "is_excellence_of",
+                            "object": "soul",
+                            "object_type": "Concept",
+                        },
+                    ],
+                }
+            )
         return _make_mock_response({"chunks": result_chunks})
 
     def _side_effect(**kwargs):
@@ -116,17 +124,21 @@ def _build_mock_llm_client(extraction_config: IngestConfig) -> MagicMock:
             return validation_keep
         if "triple quality evaluator" in system_content:
             user_content = messages[1]["content"] if len(messages) > 1 else ""
-            triple_ids = [int(match) for match in re.findall(r"Triple ID:\s*(\d+)", user_content)]
-            return _make_mock_response({
-                "triples": [
-                    {
-                        "triple_id": triple_id,
-                        "keep": True,
-                        "reason": "Grounded semantic content.",
-                    }
-                    for triple_id in triple_ids
-                ]
-            })
+            triple_ids = [
+                int(match) for match in re.findall(r"Triple ID:\s*(\d+)", user_content)
+            ]
+            return _make_mock_response(
+                {
+                    "triples": [
+                        {
+                            "triple_id": triple_id,
+                            "keep": True,
+                            "reason": "Grounded semantic content.",
+                        }
+                        for triple_id in triple_ids
+                    ]
+                }
+            )
         if "information extraction engine" in system_content:
             user_content = messages[1]["content"] if len(messages) > 1 else ""
             chunk_ids = []
@@ -183,7 +195,7 @@ def test_extractor_prompt_mentions_examples_and_guardrails():
     assert "example 1 (keep semantic claims)" in prompt
     assert "example 2 (reject structural/editorial references)" in prompt
     assert "example 3 (reject unresolved pronoun speaker)" in prompt
-    assert "example 4 (reject vague \"is\" relation)" in prompt
+    assert 'example 4 (reject vague "is" relation)' in prompt
     assert "skip speculative or hedged claims" in prompt
     assert "unresolved pronoun/speaker reference" in prompt
     assert "chapter/section/verse/stanza/folio numbering" in prompt
@@ -204,11 +216,26 @@ def test_extractor_fatal_error_classifier_is_specific():
 
 def test_extractor_rule_filters():
     """Extractor should reject obvious low-quality triples."""
-    assert TripleExtractor._triple_rejection_reason("you", "may demand refund if", "copy") == "pronoun_subject"
-    assert TripleExtractor._triple_rejection_reason("chapter", "refers to", "concept") == "structural_subject"
-    assert TripleExtractor._triple_rejection_reason("N.", "is", "triumphant") == "placeholder_subject"
-    assert TripleExtractor._triple_rejection_reason("Horus", "guides", "N.") == "placeholder_object"
-    assert TripleExtractor._triple_rejection_reason("A", "is", "concept") == "single_letter_subject"
+    assert (
+        TripleExtractor._triple_rejection_reason("you", "may demand refund if", "copy")
+        == "pronoun_subject"
+    )
+    assert (
+        TripleExtractor._triple_rejection_reason("chapter", "refers to", "concept")
+        == "structural_subject"
+    )
+    assert (
+        TripleExtractor._triple_rejection_reason("N.", "is", "triumphant")
+        == "placeholder_subject"
+    )
+    assert (
+        TripleExtractor._triple_rejection_reason("Horus", "guides", "N.")
+        == "placeholder_object"
+    )
+    assert (
+        TripleExtractor._triple_rejection_reason("A", "is", "concept")
+        == "single_letter_subject"
+    )
     assert (
         TripleExtractor._triple_rejection_reason("project gutenberg", "is", "license")
         == "legal_boilerplate_triple"
@@ -230,7 +257,12 @@ def test_extractor_rule_filters():
         == "entity_too_long_object"
     )
     assert TripleExtractor._triple_rejection_reason("Velleity", "is", "desire") is None
-    assert TripleExtractor._triple_rejection_reason("Egyptians living under the eleventh dynasty", "believed in", "afterlife") is None
+    assert (
+        TripleExtractor._triple_rejection_reason(
+            "Egyptians living under the eleventh dynasty", "believed in", "afterlife"
+        )
+        is None
+    )
 
 
 def test_evaluator_prompt_mentions_structural_and_editorial_rejections():
@@ -248,45 +280,63 @@ def test_evaluator_prompt_mentions_structural_and_editorial_rejections():
 def test_extractor_evaluator_rejects_bad_candidate(db_storage: DuckDBStorage):
     """Evaluator should veto extracted triples that fail semantic quality requirements."""
     config = IngestConfig()
-    extraction_response = _make_mock_response({
-        "chunks": [
-            {
-                "chunk_id": "chunk-1",
-                "triples": [
-                    {
-                        "subject": "Plato",
-                        "subject_type": "Person",
-                        "predicate": "argues_for",
-                        "object": "justice",
-                        "object_type": "Concept",
-                    },
-                    {
-                        "subject": "Chapter XII",
-                        "subject_type": "Work",
-                        "predicate": "describes",
-                        "object": "afterlife",
-                        "object_type": "Concept",
-                    },
-                    {
-                        "subject": "Papyrus of Ani",
-                        "subject_type": "Work",
-                        "predicate": "contains_title",
-                        "object": "Chapter of Coming Forth by Day",
-                        "object_type": "Work",
-                    },
-                ],
-            }
-        ]
-    })
-    judge_response = _make_mock_response({
-        "triples": [
-            {"triple_id": 0, "keep": True, "reason": "Grounded philosophical claim."},
-            {"triple_id": 1, "keep": False, "reason": "Structural chapter reference, not content."},
-            {"triple_id": 2, "keep": False, "reason": "Editorial title-listing fact, not semantic content."},
-        ]
-    })
+    extraction_response = _make_mock_response(
+        {
+            "chunks": [
+                {
+                    "chunk_id": "chunk-1",
+                    "triples": [
+                        {
+                            "subject": "Plato",
+                            "subject_type": "Person",
+                            "predicate": "argues_for",
+                            "object": "justice",
+                            "object_type": "Concept",
+                        },
+                        {
+                            "subject": "Chapter XII",
+                            "subject_type": "Work",
+                            "predicate": "describes",
+                            "object": "afterlife",
+                            "object_type": "Concept",
+                        },
+                        {
+                            "subject": "Papyrus of Ani",
+                            "subject_type": "Work",
+                            "predicate": "contains_title",
+                            "object": "Chapter of Coming Forth by Day",
+                            "object_type": "Work",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+    judge_response = _make_mock_response(
+        {
+            "triples": [
+                {
+                    "triple_id": 0,
+                    "keep": True,
+                    "reason": "Grounded philosophical claim.",
+                },
+                {
+                    "triple_id": 1,
+                    "keep": False,
+                    "reason": "Structural chapter reference, not content.",
+                },
+                {
+                    "triple_id": 2,
+                    "keep": False,
+                    "reason": "Editorial title-listing fact, not semantic content.",
+                },
+            ]
+        }
+    )
     mock_client = MagicMock()
-    mock_client.chat.completions.create = MagicMock(side_effect=[extraction_response, judge_response])
+    mock_client.chat.completions.create = MagicMock(
+        side_effect=[extraction_response, judge_response]
+    )
 
     extractor = TripleExtractor(db_storage, llm_client=mock_client, config=config)
     batch = [
@@ -301,9 +351,14 @@ def test_extractor_evaluator_rejects_bad_candidate(db_storage: DuckDBStorage):
         )
     ]
 
-    triple_rows, entity_rows, rejection_rows, raw_triples_seen, rejection_counts, batch_ok = (
-        extractor.process_batch_task(batch)
-    )
+    (
+        triple_rows,
+        entity_rows,
+        rejection_rows,
+        raw_triples_seen,
+        rejection_counts,
+        batch_ok,
+    ) = extractor.process_batch_task(batch)
 
     assert batch_ok is True
     assert raw_triples_seen == 3
@@ -319,39 +374,49 @@ def test_extractor_evaluator_rejects_bad_candidate(db_storage: DuckDBStorage):
 def test_extractor_retries_missing_judge_decisions_once(db_storage: DuckDBStorage):
     """Missing evaluator decisions should be retried once before acceptance/rejection."""
     config = IngestConfig()
-    extraction_response = _make_mock_response({
-        "chunks": [
-            {
-                "chunk_id": "chunk-1",
-                "triples": [
-                    {
-                        "subject": "Plato",
-                        "subject_type": "Person",
-                        "predicate": "argues_for",
-                        "object": "justice",
-                        "object_type": "Concept",
-                    },
-                    {
-                        "subject": "Aristotle",
-                        "subject_type": "Person",
-                        "predicate": "defines",
-                        "object": "virtue",
-                        "object_type": "Concept",
-                    },
-                ],
-            }
-        ]
-    })
-    first_judge_response = _make_mock_response({
-        "triples": [
-            {"triple_id": 0, "keep": True, "reason": "Grounded semantic claim."},
-        ]
-    })
-    retry_judge_response = _make_mock_response({
-        "triples": [
-            {"triple_id": 1, "keep": True, "reason": "Grounded semantic claim on retry."},
-        ]
-    })
+    extraction_response = _make_mock_response(
+        {
+            "chunks": [
+                {
+                    "chunk_id": "chunk-1",
+                    "triples": [
+                        {
+                            "subject": "Plato",
+                            "subject_type": "Person",
+                            "predicate": "argues_for",
+                            "object": "justice",
+                            "object_type": "Concept",
+                        },
+                        {
+                            "subject": "Aristotle",
+                            "subject_type": "Person",
+                            "predicate": "defines",
+                            "object": "virtue",
+                            "object_type": "Concept",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+    first_judge_response = _make_mock_response(
+        {
+            "triples": [
+                {"triple_id": 0, "keep": True, "reason": "Grounded semantic claim."},
+            ]
+        }
+    )
+    retry_judge_response = _make_mock_response(
+        {
+            "triples": [
+                {
+                    "triple_id": 1,
+                    "keep": True,
+                    "reason": "Grounded semantic claim on retry.",
+                },
+            ]
+        }
+    )
     mock_client = MagicMock()
     mock_client.chat.completions.create = MagicMock(
         side_effect=[extraction_response, first_judge_response, retry_judge_response]
@@ -366,9 +431,14 @@ def test_extractor_retries_missing_judge_decisions_once(db_storage: DuckDBStorag
         )
     ]
 
-    triple_rows, entity_rows, rejection_rows, raw_triples_seen, rejection_counts, batch_ok = (
-        extractor.process_batch_task(batch)
-    )
+    (
+        triple_rows,
+        entity_rows,
+        rejection_rows,
+        raw_triples_seen,
+        rejection_counts,
+        batch_ok,
+    ) = extractor.process_batch_task(batch)
 
     assert batch_ok is True
     assert raw_triples_seen == 2
@@ -382,34 +452,38 @@ def test_extractor_retries_missing_judge_decisions_once(db_storage: DuckDBStorag
 def test_extractor_fails_closed_after_missing_judge_retry(db_storage: DuckDBStorage):
     """A candidate still missing after one retry should be rejected explicitly."""
     config = IngestConfig()
-    extraction_response = _make_mock_response({
-        "chunks": [
-            {
-                "chunk_id": "chunk-1",
-                "triples": [
-                    {
-                        "subject": "Plato",
-                        "subject_type": "Person",
-                        "predicate": "argues_for",
-                        "object": "justice",
-                        "object_type": "Concept",
-                    },
-                    {
-                        "subject": "Aristotle",
-                        "subject_type": "Person",
-                        "predicate": "defines",
-                        "object": "virtue",
-                        "object_type": "Concept",
-                    },
-                ],
-            }
-        ]
-    })
-    first_judge_response = _make_mock_response({
-        "triples": [
-            {"triple_id": 0, "keep": True, "reason": "Grounded semantic claim."},
-        ]
-    })
+    extraction_response = _make_mock_response(
+        {
+            "chunks": [
+                {
+                    "chunk_id": "chunk-1",
+                    "triples": [
+                        {
+                            "subject": "Plato",
+                            "subject_type": "Person",
+                            "predicate": "argues_for",
+                            "object": "justice",
+                            "object_type": "Concept",
+                        },
+                        {
+                            "subject": "Aristotle",
+                            "subject_type": "Person",
+                            "predicate": "defines",
+                            "object": "virtue",
+                            "object_type": "Concept",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+    first_judge_response = _make_mock_response(
+        {
+            "triples": [
+                {"triple_id": 0, "keep": True, "reason": "Grounded semantic claim."},
+            ]
+        }
+    )
     retry_judge_response = _make_mock_response({"triples": []})
     mock_client = MagicMock()
     mock_client.chat.completions.create = MagicMock(
@@ -425,9 +499,14 @@ def test_extractor_fails_closed_after_missing_judge_retry(db_storage: DuckDBStor
         )
     ]
 
-    triple_rows, entity_rows, rejection_rows, raw_triples_seen, rejection_counts, batch_ok = (
-        extractor.process_batch_task(batch)
-    )
+    (
+        triple_rows,
+        entity_rows,
+        rejection_rows,
+        raw_triples_seen,
+        rejection_counts,
+        batch_ok,
+    ) = extractor.process_batch_task(batch)
 
     assert batch_ok is True
     assert raw_triples_seen == 2
@@ -445,12 +524,18 @@ def test_extractor_chunk_skip_rules():
     toc_chunk = "Table of Contents\nChapter I\nChapter II\nChapter III"
     legal_chunk = "Project Gutenberg License\nAll rights reserved. Terms of use apply."
     normal_chunk = "Velleity is the lowest degree of desire in this account."
-    assert TripleExtractor._chunk_skip_reason(toc_chunk) in {"table_of_contents_chunk", "structural_heading_chunk"}
+    assert TripleExtractor._chunk_skip_reason(toc_chunk) in {
+        "table_of_contents_chunk",
+        "structural_heading_chunk",
+    }
     assert TripleExtractor._chunk_skip_reason(legal_chunk) == "legal_boilerplate_chunk"
     assert TripleExtractor._chunk_skip_reason(normal_chunk) is None
 
     toc_listing = "\n".join(
-        [f"Chapter {n} — Title {n}" for n in ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"]]
+        [
+            f"Chapter {n} — Title {n}"
+            for n in ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"]
+        ]
         + ["Some filler line"]
     )
     assert TripleExtractor._chunk_skip_reason(toc_listing) in {
@@ -459,18 +544,23 @@ def test_extractor_chunk_skip_rules():
     }
 
     toc_mixed = "\n".join(
-        [f"Chapter {n} ..... p. {i*10}" for i, n in enumerate(["I", "II", "III", "IV", "V", "VI"], 1)]
+        [
+            f"Chapter {n} ..... p. {i*10}"
+            for i, n in enumerate(["I", "II", "III", "IV", "V", "VI"], 1)
+        ]
         + ["Some other content here", "More content here", "Even more here"]
     )
     assert TripleExtractor._chunk_skip_reason(toc_mixed) == "toc_like_chapter_listing"
 
-    index_chunk = "\n".join([
-        "Afterlife, see also Underworld",
-        "Anubis, see also Jackal-headed god",
-        "Ba, see also Soul",
-        "Cosmogony, see under Creation myths",
-        "Some normal line here",
-    ])
+    index_chunk = "\n".join(
+        [
+            "Afterlife, see also Underworld",
+            "Anubis, see also Jackal-headed god",
+            "Ba, see also Soul",
+            "Cosmogony, see under Creation myths",
+            "Some normal line here",
+        ]
+    )
     assert TripleExtractor._chunk_skip_reason(index_chunk) == "index_glossary_chunk"
 
     short_header = "Chapter XII — The Weighing of the Heart"
@@ -493,7 +583,9 @@ def test_corpus_audit_subtype_validator_rejects_instances():
     assert not CorpusAuditAgent._is_category_label("Project Gutenberg")
 
 
-def test_corpus_audit_filters_instance_like_subtypes(db_storage: DuckDBStorage, corpus_dir: Path):
+def test_corpus_audit_filters_instance_like_subtypes(
+    db_storage: DuckDBStorage, corpus_dir: Path
+):
     """Audit output should drop entity instances that masquerade as subtypes."""
     config = IngestConfig(resources_dir=str(corpus_dir))
 
@@ -533,14 +625,16 @@ def test_corpus_audit_clamps_bad_values(db_storage: DuckDBStorage, corpus_dir: P
     loader = CorpusLoader(db_storage, config=config)
     loader.load_resources()
 
-    bad_response = _make_mock_response({
-        "chunk_max_chars": 999999,
-        "chunk_overlap": -50,
-        "chunk_method": "invalid_method",
-        "boilerplate_patterns": ["(invalid[regex"],
-        "discovered_subtypes": {"FakeType": ["sub"]},
-        "findings": [],
-    })
+    bad_response = _make_mock_response(
+        {
+            "chunk_max_chars": 999999,
+            "chunk_overlap": -50,
+            "chunk_method": "invalid_method",
+            "boilerplate_patterns": ["(invalid[regex"],
+            "discovered_subtypes": {"FakeType": ["sub"]},
+            "findings": [],
+        }
+    )
     mock_client = MagicMock()
     mock_client.chat.completions.create = MagicMock(return_value=bad_response)
 
@@ -593,7 +687,10 @@ def test_full_pipeline_smoke(db_storage: DuckDBStorage, corpus_dir: Path):
     extractor = TripleExtractor(db_storage, llm_client=mock_client, config=config)
     extract_result = extractor.extract_pending()
     assert extract_result["selected_pending_chunks"] > 0
-    assert extract_result["total_pending_before_run"] >= extract_result["selected_pending_chunks"]
+    assert (
+        extract_result["total_pending_before_run"]
+        >= extract_result["selected_pending_chunks"]
+    )
     assert extract_result["remaining_pending_chunks"] == 0
     assert extract_result["raw_triples_seen"] >= extract_result["triples_inserted"]
     assert extract_result["rejected_triples"] >= 0

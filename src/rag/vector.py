@@ -1,4 +1,5 @@
 """Vector search for chunks and community summaries."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
 @dataclass
 class VectorSearchResult:
     """Result from vector search."""
+
     chunk_ids: list[str]
     chunk_scores: list[float]
     community_ids: list[int]
@@ -23,6 +25,7 @@ class VectorSearchResult:
 @dataclass
 class CommunityReportSearchResult:
     """Result from community report search (GraphRAG routing)."""
+
     community_ids: list[int]  # Matched community IDs
     scores: list[float]  # Similarity scores
     cited_chunk_ids: list[str]  # Chunks cited in matched reports
@@ -71,13 +74,13 @@ class VectorSearch:
     ) -> VectorSearchResult:
         """
         Search both chunks and community summaries.
-        
+
         Args:
             query: Search query text
             chunk_limit: Max chunks to return
             community_limit: Max communities to return
             text_ids: If provided, restrict chunks to those from these text_ids (scope filter)
-        
+
         Returns:
             VectorSearchResult with ranked chunks and communities
         """
@@ -133,12 +136,12 @@ class VectorSearch:
     ) -> tuple[list[str], list[float], list[float]]:
         """
         Search only chunks (fallback if communities not built).
-        
+
         Args:
             query: Search query text
             limit: Max chunks to return
             text_ids: If provided, restrict chunks to those from these text_ids (scope filter)
-        
+
         Returns:
             (chunk_ids, scores, query_embedding)
         """
@@ -169,12 +172,12 @@ class VectorSearch:
     ) -> "CommunityReportSearchResult":
         """
         Search community reports for GraphRAG routing.
-        
+
         Args:
             query: Search query
             limit: Max communities to return
             text_ids: If provided, filter cited chunks to those from these text_ids (scope filter)
-        
+
         Returns:
             CommunityReportSearchResult with community IDs, scores, and cited chunks.
             When text_ids provided, cited_chunk_ids are pre-filtered at SQL level.
@@ -189,11 +192,11 @@ class VectorSearch:
         results = self.storage.vector_search_community_reports(
             query_embedding, limit=limit, text_ids=text_ids
         )
-        
+
         community_ids = []
         community_scores = []
         all_cited_chunks = []
-        
+
         for row in results:
             comm_id, score, cited_chunks = row
             community_ids.append(comm_id)
@@ -206,7 +209,7 @@ class VectorSearch:
             top=results[:TRACE_MAX_ITEMS],
             cited_chunks=len(set(all_cited_chunks)),
         )
-        
+
         return CommunityReportSearchResult(
             community_ids=community_ids,
             scores=community_scores,

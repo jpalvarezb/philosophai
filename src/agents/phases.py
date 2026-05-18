@@ -3,6 +3,7 @@
 Defines the query processing phases and which tools are allowed in each phase.
 Used by PhilosopherAgent to enforce the state machine.
 """
+
 from __future__ import annotations
 
 from enum import Enum
@@ -10,6 +11,7 @@ from enum import Enum
 
 class Phase(str, Enum):
     """Query processing phases for state machine enforcement."""
+
     SESSION = "session"
     GUARD = "guard"
     SCOPE = "scope"

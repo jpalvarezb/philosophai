@@ -1,4 +1,5 @@
 """WebSocket endpoints for streaming agent updates."""
+
 from __future__ import annotations
 
 import asyncio
@@ -18,7 +19,9 @@ router = APIRouter()
 _agent: "MultiHopAgent | None" = None
 _philosopher_agent: "PhilosopherAgent | None" = None
 _philosopher_agent_factory: "Callable[[], PhilosopherAgent] | None" = None
-_get_agent_for_conversation: "Callable[[str], tuple[PhilosopherAgent, object]] | None" = None
+_get_agent_for_conversation: (
+    "Callable[[str], tuple[PhilosopherAgent, object]] | None"
+) = None
 
 
 def set_agent(agent: "MultiHopAgent"):
@@ -39,7 +42,9 @@ def set_philosopher_agent_factory(factory: "Callable[[], PhilosopherAgent]"):
     _philosopher_agent_factory = factory
 
 
-def set_get_agent_for_conversation(factory: "Callable[[str], tuple[PhilosopherAgent, object]]"):
+def set_get_agent_for_conversation(
+    factory: "Callable[[str], tuple[PhilosopherAgent, object]]",
+):
     """Set the conversation-scoped agent getter (Option B: server-side sessions keyed by conversation_id)."""
     global _get_agent_for_conversation
     _get_agent_for_conversation = factory
@@ -74,7 +79,7 @@ manager = ConnectionManager()
 async def websocket_query(websocket: WebSocket):
     """
     WebSocket endpoint for streaming query execution.
-    
+
     Client sends: {"question": "...", "max_hops": 2, "use_community_routing": true}
     Server streams: {"type": "status|thought|routing|traversal|answer|complete", ...}
     """
@@ -89,17 +94,23 @@ async def websocket_query(websocket: WebSocket):
             use_community_routing = request.get("use_community_routing", True)
 
             if not question:
-                await manager.send_json(websocket, {
-                    "type": "error",
-                    "message": "No question provided",
-                })
+                await manager.send_json(
+                    websocket,
+                    {
+                        "type": "error",
+                        "message": "No question provided",
+                    },
+                )
                 continue
 
             if not _agent:
-                await manager.send_json(websocket, {
-                    "type": "error",
-                    "message": "Agent not initialized",
-                })
+                await manager.send_json(
+                    websocket,
+                    {
+                        "type": "error",
+                        "message": "Agent not initialized",
+                    },
+                )
                 continue
 
             # Create event emitter that sends to websocket
@@ -109,16 +120,17 @@ async def websocket_query(websocket: WebSocket):
             # Run query with streaming events
             # We need to run the sync agent in a thread to not block
             loop = asyncio.get_event_loop()
-            
+
             def run_query():
                 events = []
+
                 def on_event(e):
                     events.append(e)
-                
+
                 # Temporarily set event handler
                 old_handler = _agent.on_event
                 _agent.on_event = on_event
-                
+
                 try:
                     result = _agent.query(
                         question=question,
@@ -128,51 +140,63 @@ async def websocket_query(websocket: WebSocket):
                     return result, events
                 finally:
                     _agent.on_event = old_handler
-            
+
             # Run in thread pool
             result, events = await loop.run_in_executor(None, run_query)
-            
+
             # Send collected events
             for event in events:
                 await manager.send_json(websocket, event)
-            
+
             # Send routing info
             trace = result.get("trace", {})
             routing = trace.get("routing", {})
             if routing.get("selected_communities"):
-                await manager.send_json(websocket, {
-                    "type": "routing",
-                    "communities": routing["selected_communities"],
-                    "scores": routing.get("community_scores", {}),
-                })
-            
+                await manager.send_json(
+                    websocket,
+                    {
+                        "type": "routing",
+                        "communities": routing["selected_communities"],
+                        "scores": routing.get("community_scores", {}),
+                    },
+                )
+
             # Send traversal info for highlighting
             traversal = result.get("traversal", {})
             if traversal:
-                await manager.send_json(websocket, {
-                    "type": "traversal",
-                    "visited_nodes": traversal.get("visited_nodes", [])[:50],
-                    "visited_edges": traversal.get("visited_edges", [])[:50],
-                    "communities": traversal.get("visited_communities", []),
-                })
-            
+                await manager.send_json(
+                    websocket,
+                    {
+                        "type": "traversal",
+                        "visited_nodes": traversal.get("visited_nodes", [])[:50],
+                        "visited_edges": traversal.get("visited_edges", [])[:50],
+                        "communities": traversal.get("visited_communities", []),
+                    },
+                )
+
             # Send final result
-            await manager.send_json(websocket, {
-                "type": "complete",
-                "answer": result["answer"],
-                "citations": result["citations"],
-                "trace": trace,
-            })
+            await manager.send_json(
+                websocket,
+                {
+                    "type": "complete",
+                    "answer": result["answer"],
+                    "citations": result["citations"],
+                    "trace": trace,
+                },
+            )
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception as e:
         try:
-            await manager.send_json(websocket, {
-                "type": "error",
-                "message": str(e),
-            })
-        except:
+            await manager.send_json(
+                websocket,
+                {
+                    "type": "error",
+                    "message": str(e),
+                },
+            )
+        except Exception:
             pass
         manager.disconnect(websocket)
 
@@ -196,31 +220,44 @@ async def websocket_agent(websocket: WebSocket):
             conversation_id = request.get("conversation_id")
 
             if not question:
-                await manager.send_json(websocket, {
-                    "type": "error",
-                    "message": "No question provided",
-                })
+                await manager.send_json(
+                    websocket,
+                    {
+                        "type": "error",
+                        "message": "No question provided",
+                    },
+                )
                 continue
 
             key = get_client_key_ws(websocket)
             if not record_request(key):
-                await manager.send_json(websocket, {
-                    "type": "error",
-                    "message": "Rate limit exceeded. Try again later.",
-                })
+                await manager.send_json(
+                    websocket,
+                    {
+                        "type": "error",
+                        "message": "Rate limit exceeded. Try again later.",
+                    },
+                )
                 continue
 
             if conversation_id and _get_agent_for_conversation:
                 agent, conv_lock = _get_agent_for_conversation(conversation_id)
             else:
-                agent = (_philosopher_agent_factory() if _philosopher_agent_factory else _philosopher_agent)
+                agent = (
+                    _philosopher_agent_factory()
+                    if _philosopher_agent_factory
+                    else _philosopher_agent
+                )
                 conv_lock = None
 
             if not agent:
-                await manager.send_json(websocket, {
-                    "type": "error",
-                    "message": "Agent not initialized",
-                })
+                await manager.send_json(
+                    websocket,
+                    {
+                        "type": "error",
+                        "message": "Agent not initialized",
+                    },
+                )
                 continue
 
             loop = asyncio.get_event_loop()
@@ -269,11 +306,14 @@ async def websocket_agent(websocket: WebSocket):
         manager.disconnect(websocket)
     except Exception as e:
         try:
-            await manager.send_json(websocket, {
-                "type": "error",
-                "message": str(e),
-            })
-        except:
+            await manager.send_json(
+                websocket,
+                {
+                    "type": "error",
+                    "message": str(e),
+                },
+            )
+        except Exception:
             pass
         manager.disconnect(websocket)
 
@@ -282,7 +322,7 @@ async def websocket_agent(websocket: WebSocket):
 async def websocket_graph(websocket: WebSocket):
     """
     WebSocket for real-time graph highlighting.
-    
+
     Server pushes: {"type": "highlight", "nodes": [...], "edges": [...], "communities": [...]}
     """
     await manager.connect(websocket)

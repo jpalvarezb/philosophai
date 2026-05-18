@@ -1,4 +1,5 @@
 """Dynamic cleaning agent for extracted triples."""
+
 from __future__ import annotations
 
 import json
@@ -88,7 +89,9 @@ class CleaningAgent:
     def collect_profiles(self) -> dict[str, Any]:
         """Collect triple/type distribution stats for the LLM."""
         if not self._table_exists("normalized_triples"):
-            logger.warning("normalized_triples table missing — returning empty profiles")
+            logger.warning(
+                "normalized_triples table missing — returning empty profiles"
+            )
             return {"total_triples": 0}
 
         con = self.storage.con
@@ -96,32 +99,26 @@ class CleaningAgent:
         if total == 0:
             return {"total_triples": 0}
 
-        top_subjects = con.execute(
-            """
+        top_subjects = con.execute("""
             SELECT subject_norm, COUNT(*) AS freq
             FROM normalized_triples
             GROUP BY 1
             ORDER BY freq DESC
             LIMIT 25
-            """
-        ).fetchall()
-        top_predicates = con.execute(
-            """
+            """).fetchall()
+        top_predicates = con.execute("""
             SELECT predicate_norm, COUNT(*) AS freq
             FROM normalized_triples
             GROUP BY 1
             ORDER BY freq DESC
             LIMIT 25
-            """
-        ).fetchall()
-        type_counts = con.execute(
-            """
+            """).fetchall()
+        type_counts = con.execute("""
             SELECT subject_type, COUNT(*) AS freq
             FROM normalized_triples
             GROUP BY 1
             ORDER BY freq DESC
-            """
-        ).fetchall()
+            """).fetchall()
 
         pattern_counts: dict[str, int] = {}
         for pattern in DEFAULT_PATTERN_PROBES:
@@ -135,20 +132,22 @@ class CleaningAgent:
                 [pattern, pattern],
             ).fetchone()[0]
 
-        short_people = con.execute(
-            """
+        short_people = con.execute("""
             SELECT DISTINCT subject_norm
             FROM normalized_triples
             WHERE subject_type = 'Person'
               AND LENGTH(subject_norm) <= 3
             LIMIT 25
-            """
-        ).fetchall()
+            """).fetchall()
 
         return {
             "total_triples": total,
-            "top_subjects": [{"entity": row[0], "freq": row[1]} for row in top_subjects],
-            "top_predicates": [{"predicate": row[0], "freq": row[1]} for row in top_predicates],
+            "top_subjects": [
+                {"entity": row[0], "freq": row[1]} for row in top_subjects
+            ],
+            "top_predicates": [
+                {"predicate": row[0], "freq": row[1]} for row in top_predicates
+            ],
             "type_counts": [{"type": row[0], "freq": row[1]} for row in type_counts],
             "pattern_counts": pattern_counts,
             "short_people": [row[0] for row in short_people],
@@ -157,7 +156,9 @@ class CleaningAgent:
     def find_provenance_failures(self) -> list[str]:
         """Return entities that repeatedly fail source-text provenance checks."""
         if not self._table_exists("entity_chunks") or not self._table_exists("chunks"):
-            logger.warning("entity_chunks/chunks tables missing — skipping provenance scan")
+            logger.warning(
+                "entity_chunks/chunks tables missing — skipping provenance scan"
+            )
             return []
 
         try:
@@ -196,7 +197,11 @@ class CleaningAgent:
             for entity, failed in failed_by_entity.items()
             if total_by_entity[entity] >= 2 and failed / total_by_entity[entity] > 0.5
         ]
-        logger.info("Provenance failures: %d entities flagged out of %d checked", len(flagged), len(total_by_entity))
+        logger.info(
+            "Provenance failures: %d entities flagged out of %d checked",
+            len(flagged),
+            len(total_by_entity),
+        )
         return sorted(flagged)
 
     @staticmethod
@@ -208,7 +213,9 @@ class CleaningAgent:
             return False
         return bool(_LIKE_PATTERN_RE.match(pattern.strip()))
 
-    def _call_llm(self, profiles: dict[str, Any], provenance_failed_entities: list[str]) -> dict[str, Any]:
+    def _call_llm(
+        self, profiles: dict[str, Any], provenance_failed_entities: list[str]
+    ) -> dict[str, Any]:
         if self.llm_client is None:
             logger.info("No LLM client — returning empty cleaning suggestions")
             return {}
@@ -255,7 +262,11 @@ class CleaningAgent:
         format_valid = [p for p in candidate_patterns if self._is_valid_like_pattern(p)]
         rejected_format = set(candidate_patterns) - set(format_valid)
         if rejected_format:
-            logger.warning("Rejected %d patterns with invalid SQL LIKE format: %s", len(rejected_format), rejected_format)
+            logger.warning(
+                "Rejected %d patterns with invalid SQL LIKE format: %s",
+                len(rejected_format),
+                rejected_format,
+            )
 
         if self.llm_client is None:
             return format_valid
@@ -264,7 +275,9 @@ class CleaningAgent:
         for pattern in format_valid:
             samples = self._sample_matches(pattern)
             if not samples:
-                logger.debug("Pattern %r matched no samples — skipping validation", pattern)
+                logger.debug(
+                    "Pattern %r matched no samples — skipping validation", pattern
+                )
                 continue
             try:
                 response = self.llm_client.chat.completions.create(
@@ -286,11 +299,23 @@ class CleaningAgent:
                 payload = json.loads(response.choices[0].message.content or "{}")
                 if payload.get("keep"):
                     confirmed.append(pattern)
-                    logger.debug("Pattern %r confirmed: %s", pattern, payload.get("rationale", ""))
+                    logger.debug(
+                        "Pattern %r confirmed: %s",
+                        pattern,
+                        payload.get("rationale", ""),
+                    )
                 else:
-                    logger.info("Pattern %r rejected by LLM: %s", pattern, payload.get("rationale", ""))
+                    logger.info(
+                        "Pattern %r rejected by LLM: %s",
+                        pattern,
+                        payload.get("rationale", ""),
+                    )
             except (json.JSONDecodeError, Exception) as exc:  # noqa: BLE001
-                logger.warning("Validation LLM call failed for pattern %r: %s — keeping pattern", pattern, exc)
+                logger.warning(
+                    "Validation LLM call failed for pattern %r: %s — keeping pattern",
+                    pattern,
+                    exc,
+                )
                 confirmed.append(pattern)
         return confirmed
 
@@ -306,7 +331,11 @@ class CleaningAgent:
         suggestions = self._call_llm(profiles, provenance_failed_entities)
 
         raw_entity_patterns = list(suggestions.get("entity_patterns", []))
-        predicate_patterns = [p for p in suggestions.get("predicate_patterns", []) if self._is_valid_like_pattern(p)]
+        predicate_patterns = [
+            p
+            for p in suggestions.get("predicate_patterns", [])
+            if self._is_valid_like_pattern(p)
+        ]
         validated_entity_patterns = self.validate_patterns(raw_entity_patterns)
 
         valid_types = set(self.config.entity_types)
@@ -314,7 +343,9 @@ class CleaningAgent:
         validated_type_rules: dict[str, list[str]] = {}
         for entity_type, patterns in raw_type_rules.items():
             if entity_type not in valid_types:
-                logger.warning("Dropping type_rules for unknown entity type %r", entity_type)
+                logger.warning(
+                    "Dropping type_rules for unknown entity type %r", entity_type
+                )
                 continue
             safe = [p for p in patterns if self._is_valid_like_pattern(p)]
             if safe:

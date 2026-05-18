@@ -1,4 +1,5 @@
 """Corpus audit agent for ingestion parameter discovery."""
+
 from __future__ import annotations
 
 import json
@@ -116,14 +117,12 @@ class CorpusAuditAgent:
                 "samples": [],
             }
 
-        rows = con.execute(
-            """
+        rows = con.execute("""
             SELECT f.text_id, f.title, f.author_source, f.file_ext, r.content
             FROM files f
             INNER JOIN raw_texts r ON f.text_id = r.text_id
             ORDER BY f.text_id
-            """
-        ).fetchall()
+            """).fetchall()
 
         if not rows:
             return {
@@ -135,7 +134,9 @@ class CorpusAuditAgent:
             }
 
         lengths = [len(row[4] or "") for row in rows]
-        paragraph_counts = [len([p for p in (row[4] or "").split("\n\n") if p.strip()]) for row in rows]
+        paragraph_counts = [
+            len([p for p in (row[4] or "").split("\n\n") if p.strip()]) for row in rows
+        ]
         format_counts: dict[str, int] = {}
         samples: list[dict[str, Any]] = []
         for idx, row in enumerate(rows):
@@ -221,7 +222,9 @@ class CorpusAuditAgent:
             return False
 
         normalized = re.sub(r"\s+", " ", label)
-        tokens = [token.strip(".,:;!?()[]{}\"'").lower() for token in normalized.split()]
+        tokens = [
+            token.strip(".,:;!?()[]{}\"'").lower() for token in normalized.split()
+        ]
         tokens = [token for token in tokens if token]
         if not tokens:
             return False
@@ -241,7 +244,9 @@ class CorpusAuditAgent:
         if "chunk_max_chars" in clamped:
             try:
                 val = int(clamped["chunk_max_chars"])
-                clamped["chunk_max_chars"] = max(_MIN_CHUNK_CHARS, min(val, _MAX_CHUNK_CHARS))
+                clamped["chunk_max_chars"] = max(
+                    _MIN_CHUNK_CHARS, min(val, _MAX_CHUNK_CHARS)
+                )
             except (TypeError, ValueError):
                 del clamped["chunk_max_chars"]
 
@@ -249,7 +254,9 @@ class CorpusAuditAgent:
             try:
                 val = int(clamped["chunk_overlap"])
                 max_chars = clamped.get("chunk_max_chars", self.config.chunk_max_chars)
-                clamped["chunk_overlap"] = max(_MIN_OVERLAP, min(val, _MAX_OVERLAP, max_chars // 2))
+                clamped["chunk_overlap"] = max(
+                    _MIN_OVERLAP, min(val, _MAX_OVERLAP, max_chars // 2)
+                )
             except (TypeError, ValueError):
                 del clamped["chunk_overlap"]
 
@@ -270,15 +277,25 @@ class CorpusAuditAgent:
         validated_subtypes: dict[str, list[str]] = {}
         for base_type, subtypes in raw_subtypes.items():
             if base_type not in valid_types:
-                logger.warning("Dropping discovered_subtypes for unknown base type %r", base_type)
+                logger.warning(
+                    "Dropping discovered_subtypes for unknown base type %r", base_type
+                )
                 continue
             if isinstance(subtypes, list):
-                kept = [str(s) for s in subtypes if s and self._is_category_label(str(s))]
-                dropped = [str(s) for s in subtypes if s and not self._is_category_label(str(s))]
+                kept = [
+                    str(s) for s in subtypes if s and self._is_category_label(str(s))
+                ]
+                dropped = [
+                    str(s)
+                    for s in subtypes
+                    if s and not self._is_category_label(str(s))
+                ]
                 if dropped:
                     logger.warning(
                         "Dropped %d entity instances posing as subtypes under %s: %s",
-                        len(dropped), base_type, dropped,
+                        len(dropped),
+                        base_type,
+                        dropped,
                     )
                 if kept:
                     validated_subtypes[base_type] = kept
@@ -301,9 +318,15 @@ class CorpusAuditAgent:
 
         report = CorpusAuditReport(
             chunk_recommendations={
-                "chunk_max_chars": suggestions.get("chunk_max_chars", self.config.chunk_max_chars),
-                "chunk_overlap": suggestions.get("chunk_overlap", self.config.chunk_overlap),
-                "chunk_method": suggestions.get("chunk_method", self.config.chunk_method),
+                "chunk_max_chars": suggestions.get(
+                    "chunk_max_chars", self.config.chunk_max_chars
+                ),
+                "chunk_overlap": suggestions.get(
+                    "chunk_overlap", self.config.chunk_overlap
+                ),
+                "chunk_method": suggestions.get(
+                    "chunk_method", self.config.chunk_method
+                ),
             },
             boilerplate_patterns=suggestions.get("boilerplate_patterns", []),
             discovered_subtypes=suggestions.get("discovered_subtypes", {}),
@@ -313,16 +336,28 @@ class CorpusAuditAgent:
 
         logger.info("Audit recommendations: %s", report.chunk_recommendations)
         if report.boilerplate_patterns:
-            logger.info("Discovered %d boilerplate patterns", len(report.boilerplate_patterns))
+            logger.info(
+                "Discovered %d boilerplate patterns", len(report.boilerplate_patterns)
+            )
         if report.discovered_subtypes:
             logger.info("Discovered subtypes: %s", report.discovered_subtypes)
 
         updated = self.config.merge_overrides(
-            chunk_max_chars=report.chunk_recommendations.get("chunk_max_chars", self.config.chunk_max_chars),
-            chunk_overlap=report.chunk_recommendations.get("chunk_overlap", self.config.chunk_overlap),
-            chunk_method=report.chunk_recommendations.get("chunk_method", self.config.chunk_method),
+            chunk_max_chars=report.chunk_recommendations.get(
+                "chunk_max_chars", self.config.chunk_max_chars
+            ),
+            chunk_overlap=report.chunk_recommendations.get(
+                "chunk_overlap", self.config.chunk_overlap
+            ),
+            chunk_method=report.chunk_recommendations.get(
+                "chunk_method", self.config.chunk_method
+            ),
         )
-        updated.boilerplate_patterns = report.boilerplate_patterns or updated.boilerplate_patterns
-        updated.discovered_subtypes = report.discovered_subtypes or updated.discovered_subtypes
+        updated.boilerplate_patterns = (
+            report.boilerplate_patterns or updated.boilerplate_patterns
+        )
+        updated.discovered_subtypes = (
+            report.discovered_subtypes or updated.discovered_subtypes
+        )
         updated.audit_report = report
         return updated, report

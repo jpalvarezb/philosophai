@@ -1,20 +1,28 @@
 """Community-gated best-first graph traversal for multi-hop reasoning."""
+
 from __future__ import annotations
 
 import heapq
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from ..config.logging import trace_logger, TRACE_TRAVERSAL, TRACE_MAX_STEPS, TRACE_VERBOSE, TRACE_MAX_ITEMS
+from ..config.logging import (
+    trace_logger,
+    TRACE_TRAVERSAL,
+    TRACE_MAX_STEPS,
+    TRACE_VERBOSE,
+    TRACE_MAX_ITEMS,
+)
 
 if TYPE_CHECKING:
     import networkx as nx
-    from ..schema import TraversalStep, TraversalTrace
+    from ..schema import TraversalTrace
     from .filters import GraphFilters
 
 
 @dataclass
 class ScoredNode:
     """Node with traversal priority score (for heap)."""
+
     score: float
     node_id: str
     from_node_id: str | None
@@ -30,7 +38,7 @@ class ScoredNode:
 class GraphTraverser:
     """
     Best-first traversal that respects community boundaries.
-    
+
     Prioritizes:
     1. Query relevance (label token overlap)
     2. Nodes within target communities
@@ -74,7 +82,7 @@ class GraphTraverser:
     ) -> "TraversalTrace":
         """
         Perform best-first traversal from seed nodes.
-        
+
         Args:
             seed_nodes: Starting node IDs (already filtered/scored by caller)
             target_communities: Community IDs to prioritize
@@ -88,7 +96,7 @@ class GraphTraverser:
             scoped_edges: If provided, only traverse edges in this set (strict scope).
                           Format: set of (subject_id, object_id, predicate_id) tuples.
                           Entity scope is derived as V(scoped_edges).
-        
+
         Returns:
             TraversalTrace with visited nodes, edges, and collected chunks
         """
@@ -108,22 +116,46 @@ class GraphTraverser:
 
         # Extract query tokens for relevance scoring during expansion
         if query:
-            stopwords = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'what', 'how',
-                         'why', 'when', 'where', 'which', 'who', 'to', 'of', 'in',
-                         'for', 'on', 'with', 'between', 'relationship'}
-            self._query_tokens = {t for t in re.findall(r'[a-z]+', query.lower())
-                                  if len(t) > 2 and t not in stopwords}
+            stopwords = {
+                "the",
+                "a",
+                "an",
+                "is",
+                "are",
+                "was",
+                "were",
+                "what",
+                "how",
+                "why",
+                "when",
+                "where",
+                "which",
+                "who",
+                "to",
+                "of",
+                "in",
+                "for",
+                "on",
+                "with",
+                "between",
+                "relationship",
+            }
+            self._query_tokens = {
+                t
+                for t in re.findall(r"[a-z]+", query.lower())
+                if len(t) > 2 and t not in stopwords
+            }
         else:
             self._query_tokens = set()
 
         target_set = set(target_communities)
         visited: set[str] = set()
         heap: list[ScoredNode] = []
-        
+
         # Track expansion count separately from seed processing
         expansion_count = 0
         self._trace_step_count = 0
-        
+
         # Diagnostic counters (instance vars for access in _expand_node)
         self._filtered_low_quality = 0
         self._filtered_blocked_pred = 0
@@ -132,7 +164,7 @@ class GraphTraverser:
         self._stopped_by_chunk_cap = False
         self._scoped_chunks = scoped_chunks  # For _get_edge_chunks filtering
         self._scoped_edges = scoped_edges  # For edge-level scope filtering
-        
+
         # Derive scoped_entity_ids from scoped_edges (V(E))
         # This is a cache, not a separate authority
         self._scoped_entity_ids: set[str] | None = None
@@ -149,17 +181,24 @@ class GraphTraverser:
                 break
             if node_id not in self.graph:
                 continue
-            
+
             # In scoped mode, skip seeds not in V(scoped_edges)
-            if self._scoped_entity_ids is not None and node_id not in self._scoped_entity_ids:
+            if (
+                self._scoped_entity_ids is not None
+                and node_id not in self._scoped_entity_ids
+            ):
                 continue
-            
+
             community_id = self.node_to_community.get(node_id)
-            
+
             # In strict mode, skip seeds not in target communities
-            if restrict_to_communities and target_set and community_id not in target_set:
+            if (
+                restrict_to_communities
+                and target_set
+                and community_id not in target_set
+            ):
                 continue
-            
+
             score = self._score_node(node_id, None, target_set, 0)
             heapq.heappush(
                 heap,
@@ -174,7 +213,9 @@ class GraphTraverser:
             )
             seeds_added += 1
             if TRACE_TRAVERSAL and seeds_added <= TRACE_MAX_ITEMS:
-                trace_logger.traversal(f"seed_added node={node_id} score={score:.3f} community={community_id}")
+                trace_logger.traversal(
+                    f"seed_added node={node_id} score={score:.3f} community={community_id}"
+                )
 
         step_number = 0
         nodes_at_depth: dict[int, int] = {}  # Track beam width per depth
@@ -184,12 +225,12 @@ class GraphTraverser:
             if len(trace.collected_chunk_ids) >= max_collected_chunks:
                 self._stopped_by_chunk_cap = True
                 break
-            
+
             current = heapq.heappop(heap)
 
             if current.node_id in visited:
                 continue
-            
+
             # Beam width check: limit nodes processed per depth
             depth = current.depth
             nodes_at_depth[depth] = nodes_at_depth.get(depth, 0) + 1
@@ -202,7 +243,7 @@ class GraphTraverser:
                     continue
 
             visited.add(current.node_id)
-            
+
             # Count toward budget only for expansions (depth > 0)
             if depth > 0:
                 expansion_count += 1
@@ -261,7 +302,7 @@ class GraphTraverser:
                 f"filtered_out_of_scope={self._filtered_out_of_scope_edges} "
                 f"stopped_by_chunk_cap={self._stopped_by_chunk_cap}"
             )
-        
+
         return trace
 
     def _score_node(
@@ -274,18 +315,23 @@ class GraphTraverser:
     ) -> float:
         """Calculate priority score for a node."""
         import re
+
         score = 0.0
 
         # Query relevance: check label token overlap
         if self._query_tokens:
             label = self.graph.nodes.get(node_id, {}).get("label", node_id)
-            label_tokens = set(re.findall(r'[a-z]+', label.lower()))
+            label_tokens = set(re.findall(r"[a-z]+", label.lower()))
             overlap = label_tokens & self._query_tokens
             if overlap:
                 # Proportional to overlap
                 relevance = len(overlap) / max(len(self._query_tokens), 1)
                 score += self.query_relevance_weight * relevance
-        if TRACE_VERBOSE and TRACE_TRAVERSAL and self._trace_step_count < TRACE_MAX_STEPS:
+        if (
+            TRACE_VERBOSE
+            and TRACE_TRAVERSAL
+            and self._trace_step_count < TRACE_MAX_STEPS
+        ):
             trace_logger.score(
                 f"score_node node={node_id} depth={depth} score={score:.3f} predicate={predicate}"
             )
@@ -326,74 +372,111 @@ class GraphTraverser:
         for neighbor_id in self.graph[node_id]:
             if neighbor_id in visited:
                 continue
-            
+
             # Scoped entity filter: skip neighbors not in scoped entity set
-            if self._scoped_entity_ids is not None and neighbor_id not in self._scoped_entity_ids:
+            if (
+                self._scoped_entity_ids is not None
+                and neighbor_id not in self._scoped_entity_ids
+            ):
                 self._filtered_out_of_scope_edges += 1
-                if TRACE_VERBOSE and TRACE_TRAVERSAL and self._trace_step_count < TRACE_MAX_STEPS:
+                if (
+                    TRACE_VERBOSE
+                    and TRACE_TRAVERSAL
+                    and self._trace_step_count < TRACE_MAX_STEPS
+                ):
                     trace_logger.traversal(f"skip_out_of_scope neighbor={neighbor_id}")
                 continue
-            
+
             # Filter check: skip stop entities during expansion
             if self.filters and not self.filters.is_valid_expansion(neighbor_id):
                 self._filtered_low_quality += 1
-                if TRACE_VERBOSE and TRACE_TRAVERSAL and self._trace_step_count < TRACE_MAX_STEPS:
+                if (
+                    TRACE_VERBOSE
+                    and TRACE_TRAVERSAL
+                    and self._trace_step_count < TRACE_MAX_STEPS
+                ):
                     trace_logger.traversal(f"skip_low_quality neighbor={neighbor_id}")
                 continue
 
             neighbor_community = self.node_to_community.get(neighbor_id)
-            
+
             # In strict mode, only expand to nodes within target communities
-            if restrict_to_communities and target_communities and neighbor_community not in target_communities:
+            if (
+                restrict_to_communities
+                and target_communities
+                and neighbor_community not in target_communities
+            ):
                 self._filtered_community += 1
-                if TRACE_VERBOSE and TRACE_TRAVERSAL and self._trace_step_count < TRACE_MAX_STEPS:
-                    trace_logger.traversal(f"skip_community neighbor={neighbor_id} community={neighbor_community}")
+                if (
+                    TRACE_VERBOSE
+                    and TRACE_TRAVERSAL
+                    and self._trace_step_count < TRACE_MAX_STEPS
+                ):
+                    trace_logger.traversal(
+                        f"skip_community neighbor={neighbor_id} community={neighbor_community}"
+                    )
                 continue
 
             # Get best IN-SCOPE edge to this neighbor (by weight, with predicate quality)
             edges = self.graph[node_id][neighbor_id]
             best_edge_key = None
             best_score = -1
-            
+
             for key in edges:
                 # Check if this specific edge is in scope
                 if self._scoped_edges is not None:
                     # Edge must be in scoped_edges set (check both directions for undirected semantics)
                     edge_in_scope = (
-                        (node_id, neighbor_id, key) in self._scoped_edges or
-                        (neighbor_id, node_id, key) in self._scoped_edges
-                    )
+                        node_id,
+                        neighbor_id,
+                        key,
+                    ) in self._scoped_edges or (
+                        neighbor_id,
+                        node_id,
+                        key,
+                    ) in self._scoped_edges
                     if not edge_in_scope:
                         continue  # Skip this edge, try others
-                
+
                 weight = edges[key].get("weight", 1)
                 label = edges[key].get("label", key)
-                modifier = self.filters.edge_weight_modifier(label) if self.filters else 1.0
+                modifier = (
+                    self.filters.edge_weight_modifier(label) if self.filters else 1.0
+                )
                 adjusted = weight * modifier
                 if adjusted > best_score:
                     best_score = adjusted
                     best_edge_key = key
-            
+
             if best_edge_key is None:
                 # No in-scope edges to this neighbor
                 if self._scoped_edges is not None:
                     self._filtered_out_of_scope_edges += 1
                 continue
-                
+
             edge_data = edges[best_edge_key]
             edge_weight = edge_data.get("weight", 1)
             edge_label = edge_data.get("label", best_edge_key)
 
             score = self._score_node(
-                neighbor_id, edge_weight, target_communities, 
-                current_depth + 1, predicate=edge_label
+                neighbor_id,
+                edge_weight,
+                target_communities,
+                current_depth + 1,
+                predicate=edge_label,
             )
-            
+
             # Skip if score is negative (blocked predicate)
             if score < 0:
                 self._filtered_blocked_pred += 1
-                if TRACE_VERBOSE and TRACE_TRAVERSAL and self._trace_step_count < TRACE_MAX_STEPS:
-                    trace_logger.traversal(f"skip_blocked_pred neighbor={neighbor_id} pred={edge_label}")
+                if (
+                    TRACE_VERBOSE
+                    and TRACE_TRAVERSAL
+                    and self._trace_step_count < TRACE_MAX_STEPS
+                ):
+                    trace_logger.traversal(
+                        f"skip_blocked_pred neighbor={neighbor_id} pred={edge_label}"
+                    )
                 continue
 
             heapq.heappush(
@@ -408,10 +491,12 @@ class GraphTraverser:
                 ),
             )
 
-    def _get_edge_chunks(self, from_id: str, to_id: str, predicate: str | None) -> list[str]:
+    def _get_edge_chunks(
+        self, from_id: str, to_id: str, predicate: str | None
+    ) -> list[str]:
         """
         Get chunk IDs from an edge.
-        
+
         If scoped_chunk_ids was provided to traverse(), only returns chunks in that set.
         """
         if from_id not in self.graph or to_id not in self.graph[from_id]:
@@ -422,7 +507,7 @@ class GraphTraverser:
             if predicate is None or key == predicate or data.get("label") == predicate:
                 all_chunks.extend(data.get("chunks", []))
         unique_chunks = list(set(all_chunks))
-        
+
         # Apply scope filter if set
         if self._scoped_chunks is not None:
             return [c for c in unique_chunks if c in self._scoped_chunks]

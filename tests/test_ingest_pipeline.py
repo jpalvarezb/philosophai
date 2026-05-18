@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import duckdb
 
 from src.ingest.chunker import CorpusChunker
 from src.ingest.cleaner import TripleCleaner

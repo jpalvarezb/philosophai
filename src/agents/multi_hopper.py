@@ -1,4 +1,5 @@
 """Multi-hop reasoning agent with community-routed GraphRAG."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable
@@ -9,8 +10,7 @@ if TYPE_CHECKING:
     from ..storage import DuckDBStorage
     from ..graph import GraphBuilder, GraphTraverser, GraphFilters
     from ..rag import VectorSearch, ResultFusion, CitationBuilder
-    from .tools import AgentTools
-    from .trace import TraceRecorder
+    from .scope import Scope
 
 
 class MultiHopAgent:
@@ -78,17 +78,19 @@ class MultiHopAgent:
             Dict with answer, citations, and traversal trace
         """
         from .trace import TraceRecorder
-        from .scope import ScopeFilter, Scope, ScopeViolationError
+        from .scope import ScopeFilter, ScopeViolationError
 
         trace = TraceRecorder(query=question)
         trace_logger.decision(
             f"query_start | max_hops={max_hops} max_context_chunks={max_context_chunks} "
             f"use_community_routing={use_community_routing} scope={'yes' if scope else 'no'}"
         )
-        
+
         # Step 0: Apply scope if provided by agent
-        scope_filter = ScopeFilter(self.storage, scope) if scope and not scope.is_empty() else None
-        
+        scope_filter = (
+            ScopeFilter(self.storage, scope) if scope and not scope.is_empty() else None
+        )
+
         # Leakage tracking for strict scope enforcement
         scope_debug = {
             "enabled": scope_filter is not None,
@@ -97,34 +99,36 @@ class MultiHopAgent:
             "traversal": {"total": 0, "out_of_scope": 0},
             "context": {"total": 0, "out_of_scope": 0},
         }
-        
+
         # Pre-compute scope data for efficient retrieval-time filtering
         scoped_text_ids: set[int] | None = None
         scoped_chunks: set[str] | None = None
         scoped_edges: set[tuple[str, str, str]] | None = None
         is_strict_scope = scope_filter is not None and scope.strict
-        
+
         if scope_filter:
             scoped_text_ids = scope_filter.get_text_ids()
             scoped_chunks = scope_filter.get_scoped_chunk_ids()
             scoped_chunk_count = len(scoped_chunks)
-            
+
             # For strict scope: compute scoped edges
             # Entity scope is derived as V(scoped_edges) - not a separate authority
             if is_strict_scope:
                 scoped_edges = scope_filter.get_scoped_edges()
                 # Derive V(E) for logging only
-                scoped_entity_ids = {s for s, _, _ in scoped_edges} | {o for _, o, _ in scoped_edges}
-                
+                scoped_entity_ids = {s for s, _, _ in scoped_edges} | {
+                    o for _, o, _ in scoped_edges
+                }
+
                 scope_logger.scope_init(
                     scope.describe(),
                     strict=True,
                     texts=len(scoped_text_ids),
                     chunks=scoped_chunk_count,
                     edges=len(scoped_edges),
-                    entities=len(scoped_entity_ids)
+                    entities=len(scoped_entity_ids),
                 )
-                
+
                 trace.add_thought(
                     f"Strict scope applied: {scope.describe()}",
                     action="scope_filter",
@@ -135,7 +139,7 @@ class MultiHopAgent:
                     scope.describe(),
                     strict=False,
                     texts=len(scoped_text_ids),
-                    chunks=scoped_chunk_count
+                    chunks=scoped_chunk_count,
                 )
                 trace.add_thought(
                     f"Scope applied (non-strict): {scope.describe()}",
@@ -150,12 +154,12 @@ class MultiHopAgent:
         # For STRICT scope: derive communities from scoped chunks (not global reports)
         # For non-strict scope or no scope: use global community report search
         self._emit("status", {"message": "Routing through communities..."})
-        
+
         target_communities = []
         community_cited_chunks = []
         community_scores = {}
         report_result = None
-        
+
         if is_strict_scope:
             # STRICT SCOPE: Derive communities from scoped chunks -> entities -> global comm_ids
             # This ensures we don't leak through global community reports
@@ -163,16 +167,18 @@ class MultiHopAgent:
                 self.node_to_community, top_n=5
             )
             target_communities = [comm_id for comm_id, _ in derived_communities]
-            community_scores = {comm_id: count / 100.0 for comm_id, count in derived_communities}  # Normalized pseudo-score
-            
+            community_scores = {
+                comm_id: count / 100.0 for comm_id, count in derived_communities
+            }  # Normalized pseudo-score
+
             # No cited chunks from community reports in strict mode
             # All chunks come from scoped vector search
             community_cited_chunks = []
-            
+
             scope_debug["routing"]["total"] = 0
             scope_debug["routing"]["out_of_scope"] = 0
             scope_debug["routing"]["mode"] = "derived_from_scope"
-            
+
             trace.add_thought(
                 f"Strict scope: derived {len(target_communities)} communities from scoped entities",
                 action="derive_scoped_communities",
@@ -184,7 +190,7 @@ class MultiHopAgent:
                 f"routing(strict) derived_communities={target_communities} "
                 f"counts={[c for _, c in derived_communities][:5]}"
             )
-            
+
         elif use_community_routing:
             # NON-STRICT or NO SCOPE: Use global community report search
             try:
@@ -193,15 +199,21 @@ class MultiHopAgent:
                     question, limit=5, text_ids=scoped_text_ids
                 )
                 target_communities = report_result.community_ids
-                community_cited_chunks = report_result.cited_chunk_ids  # Already scoped at SQL level
-                community_scores = dict(zip(report_result.community_ids, report_result.scores))
-                
+                community_cited_chunks = (
+                    report_result.cited_chunk_ids
+                )  # Already scoped at SQL level
+                community_scores = dict(
+                    zip(report_result.community_ids, report_result.scores)
+                )
+
                 # Track routing - with retrieval-time filtering, out_of_scope should be 0
                 if scope_filter:
                     scope_debug["routing"]["total"] = len(community_cited_chunks)
-                    scope_debug["routing"]["out_of_scope"] = 0  # All chunks returned are in-scope
+                    scope_debug["routing"][
+                        "out_of_scope"
+                    ] = 0  # All chunks returned are in-scope
                     scope_debug["routing"]["mode"] = "global_reports_filtered"
-                
+
                 trace.add_thought(
                     f"Community routing: selected {len(target_communities)} communities",
                     action="community_report_search",
@@ -214,12 +226,16 @@ class MultiHopAgent:
                     f"routing(global) communities={target_communities} scores={report_result.scores[:5]}"
                 )
             except Exception as e:
-                trace.add_thought(f"Community routing failed, falling back to vector search: {e}")
-                trace_logger.decision(f"routing_failed fallback=vector_search error={e}")
-        
+                trace.add_thought(
+                    f"Community routing failed, falling back to vector search: {e}"
+                )
+                trace_logger.decision(
+                    f"routing_failed fallback=vector_search error={e}"
+                )
+
         # Step 2: Vector search (scoped at SQL level)
         self._emit("status", {"message": "Searching knowledge base..."})
-        
+
         # Pass text_ids for retrieval-time scope filtering
         vector_result = self.vector_search.search(
             question, chunk_limit=15, community_limit=5, text_ids=scoped_text_ids
@@ -227,23 +243,25 @@ class MultiHopAgent:
         trace_logger.decision(
             f"vector_result chunks={len(vector_result.chunk_ids)} communities={len(vector_result.community_ids)}"
         )
-        
+
         # Track vector - with retrieval-time filtering, out_of_scope should be 0
         if scope_filter:
             scope_debug["vector"]["total"] = len(vector_result.chunk_ids)
-            scope_debug["vector"]["out_of_scope"] = 0  # All chunks returned are in-scope
-        
+            scope_debug["vector"][
+                "out_of_scope"
+            ] = 0  # All chunks returned are in-scope
+
         # HARD CHECK 1: Vector search must return only scoped chunks
         if is_strict_scope:
             vector_leakage = set(vector_result.chunk_ids) - scoped_chunks
             scope_debug["vector"]["out_of_scope"] = len(vector_leakage)
-            
+
             if vector_leakage:
                 scope_logger.check_fail(
-                    "vector", 
-                    total=len(vector_result.chunk_ids), 
-                    out_of_scope=len(vector_leakage), 
-                    examples=list(vector_leakage)
+                    "vector",
+                    total=len(vector_result.chunk_ids),
+                    out_of_scope=len(vector_leakage),
+                    examples=list(vector_leakage),
                 )
                 raise ScopeViolationError(
                     stage="vector",
@@ -252,15 +270,17 @@ class MultiHopAgent:
                 )
             else:
                 scope_logger.check_pass(
-                    "vector", 
-                    total=len(vector_result.chunk_ids), 
-                    in_scope=len(vector_result.chunk_ids)
+                    "vector",
+                    total=len(vector_result.chunk_ids),
+                    in_scope=len(vector_result.chunk_ids),
                 )
-        
+
         # Merge community-cited chunks with vector search results
         # Both are already scoped, no post-filtering needed
-        all_chunk_ids = list(dict.fromkeys(community_cited_chunks + vector_result.chunk_ids))
-        
+        all_chunk_ids = list(
+            dict.fromkeys(community_cited_chunks + vector_result.chunk_ids)
+        )
+
         trace.add_thought(
             f"Found {len(vector_result.chunk_ids)} chunks via vector search, {len(community_cited_chunks)} from community reports",
             action="vector_search",
@@ -269,9 +289,9 @@ class MultiHopAgent:
 
         # Step 3: Query-aware seed selection
         self._emit("status", {"message": "Selecting seed entities..."})
-        
+
         from ..rag import select_seeds
-        
+
         scored_seeds = select_seeds(
             query=question,
             chunk_ids=all_chunk_ids[:30],
@@ -282,25 +302,30 @@ class MultiHopAgent:
             filters=self.filters,
             max_seeds=20,
         )
-        
+
         seed_nodes = [s.entity_id for s in scored_seeds]
         seed_labels = [f"{s.label}({s.score:.2f})" for s in scored_seeds[:5]]
         trace_logger.decision(
             f"seeds_selected count={len(seed_nodes)} top={seed_labels}"
         )
-        
+
         # HARD CHECK 2: Seeds must be in V(scoped_edges)
         if is_strict_scope:
-            scoped_entity_ids = {s for s, _, _ in scoped_edges} | {o for _, o, _ in scoped_edges}
+            scoped_entity_ids = {s for s, _, _ in scoped_edges} | {
+                o for _, o, _ in scoped_edges
+            }
             seed_leakage = set(seed_nodes) - scoped_entity_ids
-            scope_debug["seeds"] = {"total": len(seed_nodes), "out_of_scope": len(seed_leakage)}
-            
+            scope_debug["seeds"] = {
+                "total": len(seed_nodes),
+                "out_of_scope": len(seed_leakage),
+            }
+
             if seed_leakage:
                 scope_logger.check_fail(
-                    "seed", 
-                    total=len(seed_nodes), 
-                    out_of_scope=len(seed_leakage), 
-                    examples=list(seed_leakage)
+                    "seed",
+                    total=len(seed_nodes),
+                    out_of_scope=len(seed_leakage),
+                    examples=list(seed_leakage),
                 )
                 raise ScopeViolationError(
                     stage="seed_selection",
@@ -309,11 +334,9 @@ class MultiHopAgent:
                 )
             else:
                 scope_logger.check_pass(
-                    "seed", 
-                    total=len(seed_nodes), 
-                    in_scope=len(seed_nodes)
+                    "seed", total=len(seed_nodes), in_scope=len(seed_nodes)
                 )
-        
+
         trace.add_thought(
             f"Selected {len(seed_nodes)} query-relevant seeds",
             action="seed_selection",
@@ -328,8 +351,10 @@ class MultiHopAgent:
         )
 
         # Use target communities for gating (stronger restriction)
-        traversal_communities = target_communities if target_communities else vector_result.community_ids
-        
+        traversal_communities = (
+            target_communities if target_communities else vector_result.community_ids
+        )
+
         # Configure traversal based on scope mode
         # STRICT SCOPE: Use scoped_edges to constrain traversal to in-scope provenance paths
         # NON-STRICT: Only filter chunks at collection time
@@ -341,9 +366,12 @@ class MultiHopAgent:
             max_nodes=80,
             beam_width=40,
             max_collected_chunks=160,
-            restrict_to_communities=bool(target_communities) and not is_strict_scope,  # Use community gating only if not strict scope
+            restrict_to_communities=bool(target_communities)
+            and not is_strict_scope,  # Use community gating only if not strict scope
             scoped_chunks=scoped_chunks,  # Filter chunks at collection time
-            scoped_edges=scoped_edges if is_strict_scope else None,  # STRICT: constrain edge traversal
+            scoped_edges=(
+                scoped_edges if is_strict_scope else None
+            ),  # STRICT: constrain edge traversal
         )
         traversal_trace.seed_chunks = all_chunk_ids[:20]
         trace_logger.decision(
@@ -351,24 +379,24 @@ class MultiHopAgent:
             f"chunks={len(traversal_trace.collected_chunk_ids)} "
             f"edges_filtered={traversal_trace.filtered_out_of_scope_edges}"
         )
-        
+
         # HARD CHECK 3: Traversal must only collect scoped chunks
         if is_strict_scope:
             traversal_leakage = set(traversal_trace.collected_chunk_ids) - scoped_chunks
             scope_debug["traversal"]["out_of_scope"] = len(traversal_leakage)
-            
+
             scope_logger.traversal_summary(
                 nodes_visited=len(traversal_trace.visited_nodes),
                 chunks_collected=len(traversal_trace.collected_chunk_ids),
-                edges_filtered=traversal_trace.filtered_out_of_scope_edges
+                edges_filtered=traversal_trace.filtered_out_of_scope_edges,
             )
-            
+
             if traversal_leakage:
                 scope_logger.check_fail(
-                    "traversal", 
-                    total=len(traversal_trace.collected_chunk_ids), 
-                    out_of_scope=len(traversal_leakage), 
-                    examples=list(traversal_leakage)
+                    "traversal",
+                    total=len(traversal_trace.collected_chunk_ids),
+                    out_of_scope=len(traversal_leakage),
+                    examples=list(traversal_leakage),
                 )
                 raise ScopeViolationError(
                     stage="traversal",
@@ -377,45 +405,61 @@ class MultiHopAgent:
                 )
             else:
                 scope_logger.check_pass(
-                    "traversal", 
-                    total=len(traversal_trace.collected_chunk_ids), 
+                    "traversal",
+                    total=len(traversal_trace.collected_chunk_ids),
                     in_scope=len(traversal_trace.collected_chunk_ids),
-                    extra={"edges_filtered": traversal_trace.filtered_out_of_scope_edges}
+                    extra={
+                        "edges_filtered": traversal_trace.filtered_out_of_scope_edges
+                    },
                 )
-        
+
         # Track traversal
         if scope_filter:
             scope_debug["traversal"]["total"] = len(traversal_trace.collected_chunk_ids)
-            scope_debug["traversal"]["out_of_scope"] = 0  # All chunks collected are in-scope
-            scope_debug["traversal"]["edges_filtered"] = traversal_trace.filtered_out_of_scope_edges
-            scope_debug["traversal"]["mode"] = "strict_edge_constrained" if is_strict_scope else "chunk_filtered"
+            scope_debug["traversal"][
+                "out_of_scope"
+            ] = 0  # All chunks collected are in-scope
+            scope_debug["traversal"][
+                "edges_filtered"
+            ] = traversal_trace.filtered_out_of_scope_edges
+            scope_debug["traversal"]["mode"] = (
+                "strict_edge_constrained" if is_strict_scope else "chunk_filtered"
+            )
 
         trace.add_thought(
-            f"Traversal complete: visited {len(traversal_trace.visited_nodes)} nodes, collected {len(traversal_trace.collected_chunk_ids)} in-scope chunks" +
-            (f" (filtered {traversal_trace.filtered_out_of_scope_edges} out-of-scope edges)" if is_strict_scope else ""),
+            f"Traversal complete: visited {len(traversal_trace.visited_nodes)} nodes, collected {len(traversal_trace.collected_chunk_ids)} in-scope chunks"
+            + (
+                f" (filtered {traversal_trace.filtered_out_of_scope_edges} out-of-scope edges)"
+                if is_strict_scope
+                else ""
+            ),
             action="graph_traverse",
             observation=f"Communities touched: {list(traversal_trace.visited_communities)}",
         )
         trace.communities_explored = list(traversal_trace.visited_communities)
         trace.nodes_visited = list(traversal_trace.visited_nodes)
-        
+
         # Vector chunks are already scoped at retrieval time
         scoped_vector_chunks = vector_result.chunk_ids
 
         # Step 5: Select context (with must-keep guarantees)
         self._emit("status", {"message": "Selecting context..."})
-        
+
         # Pass filtered report chunks (not raw report_result which has unfiltered chunks)
-        scoped_report_chunks = community_cited_chunks if scope_filter else (
-            report_result.cited_chunk_ids if report_result else []
+        scoped_report_chunks = (
+            community_cited_chunks
+            if scope_filter
+            else (report_result.cited_chunk_ids if report_result else [])
         )
-        
-        context_chunks, all_collected_ids, context_scores = self.fusion.get_context_with_selection(
-            query=question,
-            report_cited_chunks=scoped_report_chunks,
-            vector_chunks=scoped_vector_chunks,
-            trace=traversal_trace,
-            max_context=max_context_chunks,
+
+        context_chunks, all_collected_ids, context_scores = (
+            self.fusion.get_context_with_selection(
+                query=question,
+                report_cited_chunks=scoped_report_chunks,
+                vector_chunks=scoped_vector_chunks,
+                trace=traversal_trace,
+                max_context=max_context_chunks,
+            )
         )
         trace_logger.decision(
             f"context_selected total_collected={len(all_collected_ids)} selected={len(context_chunks)}"
@@ -429,13 +473,15 @@ class MultiHopAgent:
 
         # Step 6: Build citations (from context chunks only)
         chunk_ids_for_citations = [c[0] for c in context_chunks]
-        
+
         # Track context leakage (final check)
         if scope_filter:
             scope_debug["context"]["total"] = len(chunk_ids_for_citations)
             context_in_scope = scope_filter.filter_chunk_ids(chunk_ids_for_citations)
-            scope_debug["context"]["out_of_scope"] = len(chunk_ids_for_citations) - len(context_in_scope)
-        
+            scope_debug["context"]["out_of_scope"] = len(chunk_ids_for_citations) - len(
+                context_in_scope
+            )
+
         citations = self.citation_builder.build_citations(chunk_ids_for_citations)
         trace.final_cited_chunk_ids = chunk_ids_for_citations
         trace.all_collected_chunk_ids = all_collected_ids  # Keep full set for UI
@@ -449,9 +495,14 @@ class MultiHopAgent:
 
         # Extract citation indices used in answer
         import re
-        citation_refs = re.findall(r'\[(\d+)\]', answer)
-        citations_used = list(set(int(c) for c in citation_refs if int(c) <= len(citations)))
-        trace_logger.decision(f"answer_generated length={len(answer)} citations_used={len(citations_used)}")
+
+        citation_refs = re.findall(r"\[(\d+)\]", answer)
+        citations_used = list(
+            set(int(c) for c in citation_refs if int(c) <= len(citations))
+        )
+        trace_logger.decision(
+            f"answer_generated length={len(answer)} citations_used={len(citations_used)}"
+        )
 
         trace.set_answer(answer, citations_used)
 
@@ -469,6 +520,7 @@ class MultiHopAgent:
     def _generate_answer(self, question: str, context: str) -> str:
         """Generate answer using LLM with context."""
         from ..config.logging import TRACE_VERBOSE
+
         system_prompt = """You are a knowledgeable assistant answering questions based on provided context.
 
 INSTRUCTIONS:
@@ -515,7 +567,9 @@ Answer the question using the context above. Cite sources with [n] notation."""
         Simple query without graph traversal (fallback mode).
         Uses only vector search on chunks.
         """
-        chunk_ids, scores, _ = self.vector_search.search_chunks_only(question, limit=limit)
+        chunk_ids, scores, _ = self.vector_search.search_chunks_only(
+            question, limit=limit
+        )
         chunks = self.storage.get_chunk_texts(chunk_ids)
 
         citations = self.citation_builder.build_citations(chunk_ids)

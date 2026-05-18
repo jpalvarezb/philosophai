@@ -9,7 +9,11 @@ class DummyStorage:
 
 class FakeResponse:
     def __init__(self, content: str):
-        self.choices = [type("Choice", (), {"message": type("Message", (), {"content": content})()})()]
+        self.choices = [
+            type(
+                "Choice", (), {"message": type("Message", (), {"content": content})()}
+            )()
+        ]
 
 
 class FakeCompletions:
@@ -127,13 +131,29 @@ def test_preposition_role_guard_blocks_different_roles(monkeypatch):
             return ("write", "about")
         return None
 
-    monkeypatch.setattr(canonicalizer, "_get_predicate_verb_preposition", fake_verb_prep)
+    monkeypatch.setattr(
+        canonicalizer, "_get_predicate_verb_preposition", fake_verb_prep
+    )
 
-    assert canonicalizer.has_conflicting_preposition_roles("written by", "written in") is True
-    assert canonicalizer.has_conflicting_preposition_roles("written by", "wrote on") is True
-    assert canonicalizer.has_conflicting_preposition_roles("written in", "wrote on") is True
-    assert canonicalizer.has_conflicting_preposition_roles("written about", "wrote on") is False  # synonym pair
-    assert canonicalizer.has_conflicting_preposition_roles("causes", "produces") is False  # no prep
+    assert (
+        canonicalizer.has_conflicting_preposition_roles("written by", "written in")
+        is True
+    )
+    assert (
+        canonicalizer.has_conflicting_preposition_roles("written by", "wrote on")
+        is True
+    )
+    assert (
+        canonicalizer.has_conflicting_preposition_roles("written in", "wrote on")
+        is True
+    )
+    assert (
+        canonicalizer.has_conflicting_preposition_roles("written about", "wrote on")
+        is False
+    )  # synonym pair
+    assert (
+        canonicalizer.has_conflicting_preposition_roles("causes", "produces") is False
+    )  # no prep
 
 
 def test_judge_same_entity_pairs_parses_json_batches():
@@ -151,7 +171,11 @@ def test_judge_same_entity_pairs_parses_json_batches():
 
     approved = canonicalizer.judge_same_entity_pairs(
         [
-            {"left": "EU AI Act", "right": "European Union Artificial Intelligence Act", "similarity": 0.89},
+            {
+                "left": "EU AI Act",
+                "right": "European Union Artificial Intelligence Act",
+                "similarity": 0.89,
+            },
             {"left": "Plato", "right": "Aristotle", "similarity": 0.89},
         ],
         batch_size=2,

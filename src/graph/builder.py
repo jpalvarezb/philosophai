@@ -1,4 +1,5 @@
 """Build NetworkX graph from DuckDB triples."""
+
 from __future__ import annotations
 
 import pickle
@@ -43,9 +44,19 @@ class GraphBuilder:
             if not subj_id or not obj_id or not pred_id:
                 continue
 
-            subj_label = row.get("subject_label") if hasattr(row, "get") else row["subject_label"]
-            obj_label = row.get("object_label") if hasattr(row, "get") else row["object_label"]
-            pred_label = row.get("predicate_label") if hasattr(row, "get") else row["predicate_label"]
+            subj_label = (
+                row.get("subject_label")
+                if hasattr(row, "get")
+                else row["subject_label"]
+            )
+            obj_label = (
+                row.get("object_label") if hasattr(row, "get") else row["object_label"]
+            )
+            pred_label = (
+                row.get("predicate_label")
+                if hasattr(row, "get")
+                else row["predicate_label"]
+            )
 
             # Add nodes with labels
             if subj_id not in G:
@@ -60,20 +71,24 @@ class GraphBuilder:
                 key=pred_id,
                 label=str(pred_label) if pred_label else pred_id,
                 weight=int(row["weight"]) if row.get("weight") is not None else 1,
-                chunks=list(row["chunk_ids"]) if row.get("chunk_ids") is not None else [],
+                chunks=(
+                    list(row["chunk_ids"]) if row.get("chunk_ids") is not None else []
+                ),
             )
 
-        print(f"🎉 Graph built: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+        print(
+            f"🎉 Graph built: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
+        )
         self.graph = G
         return G
 
     def build_cluster_projection(self) -> nx.Graph:
         """
         Build undirected graph for clustering.
-        
+
         Collapses all predicates between entity pairs into single edges.
         Weight = number of distinct chunks mentioning any relationship.
-        
+
         Use this for Leiden community detection, NOT for traversal.
         """
         print("📊 Loading cluster projection edges...")
@@ -81,12 +96,12 @@ class GraphBuilder:
         print(f"✅ Loaded {len(df)} entity pair edges.")
 
         # Show weight distribution
-        weight_counts = df['weight'].value_counts().sort_index()
+        weight_counts = df["weight"].value_counts().sort_index()
         print("   Weight distribution:")
         for w in sorted(weight_counts.index)[:8]:
             print(f"      weight={w}: {weight_counts[w]:,} edges")
         total = len(df)
-        gt1 = len(df[df['weight'] > 1])
+        gt1 = len(df[df["weight"] > 1])
         print(f"   Edges with weight > 1: {gt1:,} ({100*gt1/total:.1f}%)")
 
         print("🏗️ Building undirected cluster graph...")
@@ -120,12 +135,24 @@ class GraphBuilder:
                 u_id,
                 v_id,
                 weight=int(row["weight"]) if row.get("weight") is not None else 1,
-                predicate_count=int(row["predicate_count"]) if row.get("predicate_count") is not None else 0,
-                top_predicates=list(row["top_predicates"]) if row.get("top_predicates") is not None else [],
-                chunks=list(row["chunk_ids"]) if row.get("chunk_ids") is not None else [],
+                predicate_count=(
+                    int(row["predicate_count"])
+                    if row.get("predicate_count") is not None
+                    else 0
+                ),
+                top_predicates=(
+                    list(row["top_predicates"])
+                    if row.get("top_predicates") is not None
+                    else []
+                ),
+                chunks=(
+                    list(row["chunk_ids"]) if row.get("chunk_ids") is not None else []
+                ),
             )
 
-        print(f"🎉 Cluster graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+        print(
+            f"🎉 Cluster graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges"
+        )
         return G
 
     def save(self, path: str | Path):
@@ -173,7 +200,9 @@ class GraphBuilder:
                 result.append((neighbor, pred_key, attrs))
         return result
 
-    def get_edge_chunks(self, from_id: str, to_id: str, predicate: str | None = None) -> list[str]:
+    def get_edge_chunks(
+        self, from_id: str, to_id: str, predicate: str | None = None
+    ) -> list[str]:
         """Get chunk IDs associated with an edge."""
         if self.graph is None or from_id not in self.graph:
             return []

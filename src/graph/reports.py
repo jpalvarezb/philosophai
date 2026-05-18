@@ -1,4 +1,5 @@
 """Community reports generation with chunk citations for GraphRAG routing."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -128,7 +129,6 @@ class CommunityReportGenerator:
 
     def _get_top_entities(self, node_ids: list[str], top_k: int = 15) -> list[dict]:
         """Get top entities by weighted degree within community."""
-        node_set = set(node_ids)
         subgraph = self.graph.subgraph(node_ids)
 
         # Calculate weighted degree (sum of edge weights)
@@ -146,16 +146,20 @@ class CommunityReportGenerator:
             weighted_degrees[node] = total_weight
 
         # Sort and take top k
-        sorted_nodes = sorted(weighted_degrees.items(), key=lambda x: x[1], reverse=True)
+        sorted_nodes = sorted(
+            weighted_degrees.items(), key=lambda x: x[1], reverse=True
+        )
 
         result = []
         for node_id, degree in sorted_nodes[:top_k]:
             label = self.graph.nodes.get(node_id, {}).get("label", node_id)
-            result.append({
-                "id": node_id,
-                "label": label,
-                "weighted_degree": degree,
-            })
+            result.append(
+                {
+                    "id": node_id,
+                    "label": label,
+                    "weighted_degree": degree,
+                }
+            )
         return result
 
     def _get_top_edges(self, node_ids: list[str], top_k: int = 20) -> list[dict]:
@@ -170,15 +174,21 @@ class CommunityReportGenerator:
                 if neighbor not in node_set:
                     continue
                 for pred_key, data in self.graph[node_id][neighbor].items():
-                    edges.append({
-                        "subject_id": node_id,
-                        "subject_label": self.graph.nodes.get(node_id, {}).get("label", node_id),
-                        "predicate": data.get("label", pred_key),
-                        "object_id": neighbor,
-                        "object_label": self.graph.nodes.get(neighbor, {}).get("label", neighbor),
-                        "weight": data.get("weight", 1),
-                        "chunk_ids": data.get("chunks", []),
-                    })
+                    edges.append(
+                        {
+                            "subject_id": node_id,
+                            "subject_label": self.graph.nodes.get(node_id, {}).get(
+                                "label", node_id
+                            ),
+                            "predicate": data.get("label", pred_key),
+                            "object_id": neighbor,
+                            "object_label": self.graph.nodes.get(neighbor, {}).get(
+                                "label", neighbor
+                            ),
+                            "weight": data.get("weight", 1),
+                            "chunk_ids": data.get("chunks", []),
+                        }
+                    )
 
         # Sort by weight and take top k
         edges.sort(key=lambda x: x["weight"], reverse=True)
@@ -261,7 +271,9 @@ class CommunityReporter:
         df = self.storage.get_communities()
         if df.empty:
             return df
-        return df.nlargest(top_k, "size")[["community_id", "size", "top_terms", "summary"]]
+        return df.nlargest(top_k, "size")[
+            ["community_id", "size", "top_terms", "summary"]
+        ]
 
     def find_community_by_terms(self, search_terms: list[str]) -> "pd.DataFrame":
         """Find communities containing specific terms."""
@@ -326,8 +338,14 @@ class CommunityReporter:
         for _, row in largest.iterrows():
             print(f"\nCommunity {row['community_id']} ({row['size']} nodes)")
             top_terms = row["top_terms"]
-            terms = top_terms[:5] if top_terms is not None and len(top_terms) > 0 else []
+            terms = (
+                top_terms[:5] if top_terms is not None and len(top_terms) > 0 else []
+            )
             print(f"  Terms: {', '.join(terms)}")
             if row["summary"]:
-                summary = row["summary"][:200] + "..." if len(row["summary"]) > 200 else row["summary"]
+                summary = (
+                    row["summary"][:200] + "..."
+                    if len(row["summary"]) > 200
+                    else row["summary"]
+                )
                 print(f"  Summary: {summary}")

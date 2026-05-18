@@ -1,4 +1,5 @@
 """In-memory rate limiting per client IP (fixed window)."""
+
 from __future__ import annotations
 
 import os
@@ -54,10 +55,7 @@ def record_request(client_key: str) -> bool:
     now = time.monotonic()
     with _lock:
         # Evict expired windows to avoid unbounded growth
-        to_del = [
-            k for k, (_, start) in _store.items()
-            if now - start >= window
-        ]
+        to_del = [k for k, (_, start) in _store.items() if now - start >= window]
         for k in to_del:
             del _store[k]
 

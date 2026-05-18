@@ -1,4 +1,5 @@
 """Production chunking for raw corpus text."""
+
 from __future__ import annotations
 
 import logging
@@ -44,8 +45,7 @@ class CorpusChunker:
 
     def ensure_schema(self) -> None:
         """Ensure the chunks table exists with the expected schema."""
-        self.storage.con.execute(
-            """
+        self.storage.con.execute("""
             CREATE TABLE IF NOT EXISTS chunks (
                 chunk_id VARCHAR PRIMARY KEY,
                 text_id INTEGER,
@@ -57,8 +57,7 @@ class CorpusChunker:
                 source_path VARCHAR,
                 content VARCHAR
             )
-            """
-        )
+            """)
 
     def chunk_all(self, skip_existing: bool = True) -> dict[str, int]:
         """Chunk all raw texts into the chunks table."""
@@ -66,25 +65,21 @@ class CorpusChunker:
         con = self.storage.con
 
         if skip_existing:
-            texts = con.execute(
-                """
+            texts = con.execute("""
                 SELECT f.text_id, f.file_path, r.content
                 FROM files f
                 INNER JOIN raw_texts r ON f.text_id = r.text_id
                 WHERE f.text_id NOT IN (SELECT DISTINCT text_id FROM chunks)
                 ORDER BY f.text_id
-                """
-            ).fetchall()
+                """).fetchall()
         else:
             con.execute("DELETE FROM chunks")
-            texts = con.execute(
-                """
+            texts = con.execute("""
                 SELECT f.text_id, f.file_path, r.content
                 FROM files f
                 INNER JOIN raw_texts r ON f.text_id = r.text_id
                 ORDER BY f.text_id
-                """
-            ).fetchall()
+                """).fetchall()
 
         inserted = 0
         total_texts = len(texts)
@@ -100,7 +95,9 @@ class CorpusChunker:
             )
             payloads = self.chunk_text(raw_text)
             if not payloads:
-                logger.warning("No chunks produced for text_id=%s path=%s", text_id, file_path)
+                logger.warning(
+                    "No chunks produced for text_id=%s path=%s", text_id, file_path
+                )
                 continue
 
             level_counts: dict[str, int] = {}
@@ -159,7 +156,9 @@ class CorpusChunker:
 
         text = raw_text.replace("\r\n", "\n")
         text = re.sub(r"\t+", " ", text)
-        patterns = [re.compile(p, re.IGNORECASE) for p in self.config.boilerplate_patterns]
+        patterns = [
+            re.compile(p, re.IGNORECASE) for p in self.config.boilerplate_patterns
+        ]
 
         lines: list[str] = []
         for line in text.split("\n"):
@@ -187,7 +186,9 @@ class CorpusChunker:
         return paragraphs or ([text.strip()] if text.strip() else [])
 
     @staticmethod
-    def _split_large_paragraphs(paragraphs: list[str], max_chars: int, overlap: int) -> list[str]:
+    def _split_large_paragraphs(
+        paragraphs: list[str], max_chars: int, overlap: int
+    ) -> list[str]:
         result: list[str] = []
         for para in paragraphs:
             if len(para) <= max_chars:
@@ -309,7 +310,9 @@ class CorpusChunker:
             denom = np.linalg.norm(left.toarray()) * np.linalg.norm(right.toarray())
             adjacency_scores.append(float(numerator / denom) if denom else 0.0)
 
-        threshold = float(np.percentile(adjacency_scores, 25)) if adjacency_scores else 0.0
+        threshold = (
+            float(np.percentile(adjacency_scores, 25)) if adjacency_scores else 0.0
+        )
         chunks: list[str] = []
         current = [sentences[0]]
         current_len = len(sentences[0])
@@ -317,9 +320,9 @@ class CorpusChunker:
         for idx, sentence in enumerate(sentences[1:], start=1):
             boundary_score = adjacency_scores[idx - 1]
             sentence_len = len(sentence) + 1
-            if (
-                current
-                and (boundary_score < threshold or current_len + sentence_len > self.config.chunk_max_chars)
+            if current and (
+                boundary_score < threshold
+                or current_len + sentence_len > self.config.chunk_max_chars
             ):
                 chunks.append(" ".join(current).strip())
                 if self.config.chunk_overlap > 0 and current:

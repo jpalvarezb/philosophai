@@ -157,7 +157,7 @@ philosophai/
 ## Development
 
 - **Tests**: Default: `pytest`. CI and local “no secrets” runs: `pytest -m "not live_integration"`. For real OpenAI + DuckDB tests: set `RUN_LIVE_INTEGRATION=1`, `OPENAI_API_KEY`, and `PHILOSOPH_DB`. Markers are defined in `pyproject.toml`; only use a marker in config if at least one test references it.
-- **Formatting / lint**: Dev deps include `ruff` and `black`; repo-wide `black --check` / `ruff check` are not yet enforced in CI so existing files can be normalized in a follow-up.
+- **Formatting / lint**: `ruff check src tests` and `black --check src tests` (also run in CI).
 - **Local CORS**: Set `PHILOSOPH_ENV=development` in `.env` so default CORS allows localhost; override with `CORS_ORIGINS` if needed.
 
 ## Deployment

@@ -1,4 +1,5 @@
 """Build and format citations for LLM responses."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -25,10 +26,10 @@ class CitationBuilder:
     ) -> list["Citation"]:
         """
         Build Citation objects for a list of chunk IDs.
-        
+
         Args:
             chunk_ids: Ordered list of chunk IDs used in the answer
-        
+
         Returns:
             List of Citation objects with index, content, and metadata
         """
@@ -106,10 +107,10 @@ class CitationBuilder:
     ) -> str:
         """
         Format chunks as numbered context for LLM prompt.
-        
+
         Args:
             chunks: List of (chunk_id, content) tuples
-        
+
         Returns:
             Formatted string with numbered citations
         """

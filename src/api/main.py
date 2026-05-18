@@ -1,4 +1,5 @@
 """FastAPI application for PhilosophAI with GraphRAG."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,19 +7,8 @@ import os
 import threading
 import time
 from contextlib import asynccontextmanager
-from typing import Literal
-
-# Environment: "development" (local) vs "production" (Fly/cloud).
-# Set PHILOSOPH_ENV explicitly; if unset, we treat Fly (FLY_APP_NAME) as production, else development.
-def _env_mode() -> Literal["development", "production"]:
-    env = os.environ.get("PHILOSOPH_ENV", "").lower()
-    if env in ("dev", "development", "local"):
-        return "development"
-    if env in ("prod", "production") or os.environ.get("FLY_APP_NAME"):
-        return "production"
-    return "development"
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,6 +23,17 @@ from .ws import (
     set_philosopher_agent,
     set_philosopher_agent_factory,
 )
+
+
+# Environment: "development" (local) vs "production" (Fly/cloud).
+# Set PHILOSOPH_ENV explicitly; if unset, we treat Fly (FLY_APP_NAME) as production, else development.
+def _env_mode() -> Literal["development", "production"]:
+    env = os.environ.get("PHILOSOPH_ENV", "").lower()
+    if env in ("dev", "development", "local"):
+        return "development"
+    if env in ("prod", "production") or os.environ.get("FLY_APP_NAME"):
+        return "production"
+    return "development"
 
 
 # --- Pydantic Models ---
@@ -65,7 +66,9 @@ class AgentQueryRequest(BaseModel):
     max_iterations: int = 25
     verbose: bool = False
     session_id: str | None = None  # Optional; echoed in response for ordering/tracking
-    conversation_id: str | None = None  # Optional; when set, reuses server-side agent (last 5 Q/As) for this conversation
+    conversation_id: str | None = (
+        None  # Optional; when set, reuses server-side agent (last 5 Q/As) for this conversation
+    )
 
 
 class AgentQueryResponse(BaseModel):
@@ -80,16 +83,21 @@ class AgentQueryResponse(BaseModel):
     iterations: int
     session_continued: bool = False
     session_id: str | None = None  # Echo of request session_id, if provided
-    sequence_id: int = 0  # Monotonic id per response; client can use to order or detect out-of-order
+    sequence_id: int = (
+        0  # Monotonic id per response; client can use to order or detect out-of-order
+    )
 
 
 class AgentResetRequest(BaseModel):
-    conversation_id: str | None = None  # If set, reset only this conversation's agent; else reset shared agent (legacy)
+    conversation_id: str | None = (
+        None  # If set, reset only this conversation's agent; else reset shared agent (legacy)
+    )
 
 
 # --- Application State ---
 class AppState:
     """Holds initialized components."""
+
     def __init__(self):
         self.storage = None
         self.graph_builder = None
@@ -113,9 +121,13 @@ _query_sequence_lock = threading.Lock()
 _query_sequence_counter = 0
 
 # Option B: server-side sessions keyed by conversation_id
-_CONVERSATION_TTL_SECONDS = int(os.environ.get("PHILOSOPH_CONVERSATION_TTL", "1800"))  # 30 min
+_CONVERSATION_TTL_SECONDS = int(
+    os.environ.get("PHILOSOPH_CONVERSATION_TTL", "1800")
+)  # 30 min
 _CONVERSATION_MAX_ENTRIES = int(os.environ.get("PHILOSOPH_CONVERSATION_MAX", "200"))
-_conversation_store: dict[str, tuple[Any, float]] = {}  # conversation_id -> (agent, last_used_ts)
+_conversation_store: dict[str, tuple[Any, float]] = (
+    {}
+)  # conversation_id -> (agent, last_used_ts)
 _conversation_locks: dict[str, threading.Lock] = {}
 _store_lock = threading.Lock()
 
@@ -124,7 +136,8 @@ def _evict_conversations():
     """Remove expired entries and trim to max size. Caller must hold _store_lock."""
     now = time.monotonic()
     to_remove = [
-        cid for cid, (_, last) in _conversation_store.items()
+        cid
+        for cid, (_, last) in _conversation_store.items()
         if now - last > _CONVERSATION_TTL_SECONDS
     ]
     if len(_conversation_store) > _CONVERSATION_MAX_ENTRIES:
@@ -190,6 +203,7 @@ def _create_philosopher_agent():
 def init_components():
     """Initialize all components (called at startup)."""
     from ..config import setup_logging
+
     setup_logging()
 
     from openai import OpenAI
@@ -239,7 +253,9 @@ def init_components():
     state.citation_builder = CitationBuilder(state.storage, state.node_to_community)
 
     # Initialize filters for traversal and seeding (uses precomputed conceptness scores)
-    filters = GraphFilters(G, storage=state.storage, hub_threshold_pct=0.01, min_degree=1)
+    filters = GraphFilters(
+        G, storage=state.storage, hub_threshold_pct=0.01, min_degree=1
+    )
     traverser = GraphTraverser(G, state.node_to_community, filters=filters)
 
     state.agent = MultiHopAgent(
@@ -364,7 +380,9 @@ def create_app() -> FastAPI:
 
     # Agentic query endpoint (PhilosopherAgent with sequential thinking)
     @app.post("/api/agent/query", response_model=AgentQueryResponse)
-    async def agent_query(request: AgentQueryRequest, _: None = Depends(_rate_limit_dep)):
+    async def agent_query(
+        request: AgentQueryRequest, _: None = Depends(_rate_limit_dep)
+    ):
         """
         Execute an agentic query with sequential thinking.
 
@@ -388,7 +406,9 @@ def create_app() -> FastAPI:
                         question=request.question,
                         max_iterations=request.max_iterations,
                     )
+
         else:
+
             def run_query():
                 agent = _create_philosopher_agent()
                 return agent.query(
@@ -407,7 +427,9 @@ def create_app() -> FastAPI:
 
     # Agentic greeting (LLM-generated); uses fresh agent so concurrent greetings don't share state
     @app.post("/api/agent/reset")
-    async def agent_reset(body: AgentResetRequest | None = Body(None), _: None = Depends(_rate_limit_dep)):
+    async def agent_reset(
+        body: AgentResetRequest | None = Body(None), _: None = Depends(_rate_limit_dep)
+    ):
         """Reset conversation state. If body.conversation_id is set, reset that conversation's agent; else reset shared agent (legacy)."""
         if not state.ready or not state.philosopher_agent:
             raise HTTPException(status_code=503, detail="Agent not initialized")
@@ -422,10 +444,15 @@ def create_app() -> FastAPI:
             try:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, do_reset)
-                return {"status": "ok", "message": "Conversation reset", "conversation_id": body.conversation_id}
+                return {
+                    "status": "ok",
+                    "message": "Conversation reset",
+                    "conversation_id": body.conversation_id,
+                }
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
         else:
+
             def do_reset():
                 with _shared_philosopher_agent_lock:
                     state.philosopher_agent.reset_session()
@@ -499,25 +526,30 @@ def create_app() -> FastAPI:
             data = H.nodes.get(node_id, {})
             node_id_str = str(node_id)
             label = data.get("label", node_id_str)
-            nodes.append({
-                "id": node_id_str,
-                "label": str(label) if label is not None else node_id_str,
-                "community": state.node_to_community.get(node_id, state.node_to_community.get(node_id_str)),
-                "degree": int(deg_map.get(node_id, 0)),
-            })
+            nodes.append(
+                {
+                    "id": node_id_str,
+                    "label": str(label) if label is not None else node_id_str,
+                    "community": state.node_to_community.get(
+                        node_id, state.node_to_community.get(node_id_str)
+                    ),
+                    "degree": int(deg_map.get(node_id, 0)),
+                }
+            )
 
         for u, v, data in H.edges(data=True):
             if u in node_set and v in node_set:
                 label = data.get("label", "")
-                links.append({
-                    "source": str(u),
-                    "target": str(v),
-                    "label": str(label) if label is not None else "",
-                    "weight": int(data.get("weight", 1) or 1),
-                })
+                links.append(
+                    {
+                        "source": str(u),
+                        "target": str(v),
+                        "label": str(label) if label is not None else "",
+                        "weight": int(data.get("weight", 1) or 1),
+                    }
+                )
 
         return {"nodes": nodes, "links": links}
-
 
     # Communities endpoint
     @app.get("/api/communities")
@@ -538,18 +570,22 @@ def create_app() -> FastAPI:
         result = []
         for _, row in communities_df.iterrows():
             top_terms = row["top_terms"]
-            if top_terms is None or (hasattr(top_terms, '__len__') and len(top_terms) == 0):
+            if top_terms is None or (
+                hasattr(top_terms, "__len__") and len(top_terms) == 0
+            ):
                 top_terms = []
             else:
                 top_terms = list(top_terms)[:10]
 
-            result.append({
-                "community_id": int(row["community_id"]),
-                "size": int(row["size"]),
-                "top_terms": top_terms,
-                "summary": row["summary"],
-                "report": report_map.get(row["community_id"]),
-            })
+            result.append(
+                {
+                    "community_id": int(row["community_id"]),
+                    "size": int(row["size"]),
+                    "top_terms": top_terms,
+                    "summary": row["summary"],
+                    "report": report_map.get(row["community_id"]),
+                }
+            )
 
         return {"communities": result}
 
@@ -572,7 +608,7 @@ def create_app() -> FastAPI:
         row = row.iloc[0]
 
         top_terms = row["top_terms"]
-        if top_terms is None or (hasattr(top_terms, '__len__') and len(top_terms) == 0):
+        if top_terms is None or (hasattr(top_terms, "__len__") and len(top_terms) == 0):
             top_terms = []
         else:
             top_terms = list(top_terms)
@@ -590,9 +626,12 @@ def create_app() -> FastAPI:
     async def export_transcript(payload: dict[str, Any]):
         """Generate TXT transcript with renumbered citations. Body: export payload (messages + graph_trace)."""
         from .export_artifacts import build_transcript_text
+
         try:
             text = build_transcript_text(payload)
-            return PlainTextResponse(content=text, media_type="text/plain; charset=utf-8")
+            return PlainTextResponse(
+                content=text, media_type="text/plain; charset=utf-8"
+            )
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -601,6 +640,7 @@ def create_app() -> FastAPI:
         """Generate interactive HTML report (zoom/pan graph). Body: export payload (messages + graph_trace)."""
         try:
             from .export_artifacts import build_report_html
+
             html = build_report_html(payload)
             return Response(content=html, media_type="text/html; charset=utf-8")
         except Exception as e:
@@ -612,6 +652,7 @@ def create_app() -> FastAPI:
         """Return graph-only HTML for client to download as philo_graph.html. Body: same as other export payloads."""
         try:
             from .export_artifacts import build_report_html
+
             html = build_report_html({**payload, "embed_only": True})
             return {"html": html}
         except Exception as e:
@@ -620,13 +661,23 @@ def create_app() -> FastAPI:
     # Serve UI: catch-all route last so /api/* and /health match first (StaticFiles at "/" can take precedence otherwise)
     ui_path = Path(__file__).resolve().parent.parent.parent / "ui"
     if ui_path.exists():
+
         @app.get("/{full_path:path}")
         async def serve_ui(full_path: str):
             # Only serve UI for non-API paths (API routes are matched first)
-            if full_path.startswith("api") or full_path == "health" or full_path.startswith("docs") or full_path.startswith("openapi"):
+            if (
+                full_path.startswith("api")
+                or full_path == "health"
+                or full_path.startswith("docs")
+                or full_path.startswith("openapi")
+            ):
                 raise HTTPException(status_code=404, detail="Not found")
             path = (ui_path / full_path).resolve() if full_path else ui_path
-            if full_path and path.is_file() and path.parent.resolve().is_relative_to(ui_path.resolve()):
+            if (
+                full_path
+                and path.is_file()
+                and path.parent.resolve().is_relative_to(ui_path.resolve())
+            ):
                 return FileResponse(path)
             index = ui_path / "index.html"
             if index.is_file():
@@ -643,6 +694,7 @@ app = create_app()
 def main() -> None:
     """Entry point for philosophai-server console script."""
     import uvicorn
+
     port = int(os.environ.get("PORT", "8000"))
     uvicorn.run(app, host="0.0.0.0", port=port)
 

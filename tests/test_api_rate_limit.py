@@ -1,4 +1,5 @@
 """Tests for rate limiting on agent/query endpoints."""
+
 from __future__ import annotations
 
 import pytest

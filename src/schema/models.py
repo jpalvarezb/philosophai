@@ -1,4 +1,5 @@
 """Data models for PhilosophAI."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -8,6 +9,7 @@ from typing import Any
 @dataclass
 class Chunk:
     """A text chunk from the corpus."""
+
     chunk_id: str
     content: str
     text_id: int | None = None
@@ -18,6 +20,7 @@ class Chunk:
 @dataclass
 class Triple:
     """A subject-predicate-object triple."""
+
     subject_id: str
     predicate_id: str
     object_id: str
@@ -31,6 +34,7 @@ class Triple:
 @dataclass
 class Community:
     """A cluster of related nodes detected by Leiden."""
+
     community_id: int
     level: int
     node_ids: list[str]
@@ -43,6 +47,7 @@ class Community:
 @dataclass
 class TraversalStep:
     """A single step in the graph traversal."""
+
     step_number: int
     node_id: str
     node_label: str
@@ -57,17 +62,20 @@ class TraversalStep:
 @dataclass
 class TraversalTrace:
     """Complete trace of a multi-hop traversal for UI highlighting."""
+
     query: str
     seed_chunks: list[str] = field(default_factory=list)
     seed_nodes: list[str] = field(default_factory=list)
     seed_communities: list[int] = field(default_factory=list)
     steps: list[TraversalStep] = field(default_factory=list)
     visited_nodes: set[str] = field(default_factory=set)
-    visited_edges: list[tuple[str, str, str]] = field(default_factory=list)  # (from, to, predicate)
+    visited_edges: list[tuple[str, str, str]] = field(
+        default_factory=list
+    )  # (from, to, predicate)
     visited_communities: set[int] = field(default_factory=set)
     collected_chunk_ids: list[str] = field(default_factory=list)
     max_depth: int = 0  # Track max hop depth reached
-    
+
     # Diagnostic counters from traverser
     filtered_low_quality: int = 0
     filtered_blocked_pred: int = 0
@@ -81,7 +89,9 @@ class TraversalTrace:
         if step.community_id is not None:
             self.visited_communities.add(step.community_id)
         if step.from_node_id and step.edge_label:
-            self.visited_edges.append((step.from_node_id, step.node_id, step.edge_label))
+            self.visited_edges.append(
+                (step.from_node_id, step.node_id, step.edge_label)
+            )
         self.collected_chunk_ids.extend(step.chunk_ids)
 
     def to_dict(self) -> dict[str, Any]:
@@ -91,7 +101,7 @@ class TraversalTrace:
         if self.steps:
             for step in self.steps:
                 max_depth = max(max_depth, step.depth)
-        
+
         return {
             "query": self.query,
             "seed_chunks": self.seed_chunks,
@@ -111,7 +121,8 @@ class TraversalTrace:
             ],
             "visited_nodes": list(self.visited_nodes),
             "visited_edges": [
-                {"from": e[0], "to": e[1], "predicate": e[2]} for e in self.visited_edges
+                {"from": e[0], "to": e[1], "predicate": e[2]}
+                for e in self.visited_edges
             ],
             "edges_traversed": len(self.visited_edges),
             "hops": max_depth,
@@ -123,6 +134,7 @@ class TraversalTrace:
 @dataclass
 class Citation:
     """An inline citation linking answer text to source chunk."""
+
     index: int  # [1], [2], etc.
     chunk_id: str
     chunk_content: str
@@ -139,7 +151,11 @@ class Citation:
         return {
             "index": self.index,
             "chunk_id": self.chunk_id,
-            "preview": self.chunk_content[:300] + "..." if len(self.chunk_content) > 300 else self.chunk_content,
+            "preview": (
+                self.chunk_content[:300] + "..."
+                if len(self.chunk_content) > 300
+                else self.chunk_content
+            ),
             "full_content": self.chunk_content,
             "community_id": self.community_id,
             "node_ids": self.node_ids,
