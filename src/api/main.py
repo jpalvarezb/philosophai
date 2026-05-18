@@ -310,8 +310,8 @@ def create_app() -> FastAPI:
     allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
     print(f"🔒 CORS ({mode}): {allowed_origins}")
 
-    _rlimit = int(os.environ.get("PHILOSOPH_RATE_LIMIT_REQUESTS"))
-    _rwin = int(os.environ.get("PHILOSOPH_RATE_LIMIT_WINDOW_SECONDS"))
+    _rlimit = int(os.environ.get("PHILOSOPH_RATE_LIMIT_REQUESTS", "2"))
+    _rwin = int(os.environ.get("PHILOSOPH_RATE_LIMIT_WINDOW_SECONDS", "60"))
     if _rlimit <= 0:
         print("⏱️ Rate limit: disabled")
     else:
@@ -641,7 +641,7 @@ app = create_app()
 
 
 def main() -> None:
-    """Entry point for philosiphai-server console script."""
+    """Entry point for philosophai-server console script."""
     import uvicorn
     port = int(os.environ.get("PORT", "8000"))
     uvicorn.run(app, host="0.0.0.0", port=port)

@@ -1,6 +1,44 @@
-# PhilosophAI (philosiphai)
+# PhilosophAI
+
+[![CI](https://github.com/jpalvarezb/philosophai/actions/workflows/ci.yml/badge.svg)](https://github.com/jpalvarezb/philosophai/actions/workflows/ci.yml)
+![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)
+![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
+
+**Access:** There is **no anonymous live demo**. The UI is deployed for production (`butlerian.xyz` / `philo.butlerian.xyz`). To use PHILO-001 on Butlerian infrastructure, **[request access](https://www.butlerian.xyz/signup)** (manual review). To try PhilosophAI without an account, follow **Quick start** and run locally.
 
 **Knowledge Graph RAG with community routing** — a GraphRAG-style system that builds a knowledge graph from philosophical texts, detects communities, and answers questions via an agent that traverses the graph and synthesizes answers with citations.
+
+**UI:** Single-file frontend in `ui/index.html`; FastAPI serves it at `/` in production. Vite proxy for local UI dev (see `DEPLOY.md`).
+
+## Architecture
+
+Offline ingest builds the DuckDB-backed graph once; queries at runtime hit the stored graph plus the LLM (no Leiden re-run per request).
+
+```mermaid
+flowchart LR
+  subgraph offline [Offline ingest]
+    Docs[Source texts] --> Clean[Clean and canonicalize]
+    Clean --> Embed[Embed chunks]
+    Embed --> Leiden[Leiden communities]
+    Leiden --> Reports[Community reports]
+  end
+  Reports --> DuckDB[(DuckDB graph store)]
+  subgraph runtime [Runtime query]
+    User[User query] --> API[FastAPI + WebSocket]
+    API --> Agent[PhilosopherAgent: phases, scope, multi-hop]
+    Agent --> DuckDB
+    Agent --> LLM[OpenAI]
+    API --> UI[Web UI gated signup]
+  end
+```
+
+## Why custom agent tooling?
+
+PhilosophAI uses a **custom agent runtime** (phases, scope, multi-hop graph traversal, citation-gated tools) instead of LangGraph or LangChain. That keeps deterministic phase transitions and graph-first reasoning without framework overhead — the DuckDB-backed graph is the main state carrier.
+
+### GraphRAG in one paragraph
+
+Classic RAG retrieves isolated chunks and struggles on multi-hop questions. **GraphRAG** (entity graph → community clustering, e.g. Leiden → neighborhood / community-augmented retrieval) grounds the philosopher agent in coherent subgraphs so answers can cite trails across philosophers.
 
 ## Features
 
@@ -22,7 +60,7 @@
 
 ```bash
 git clone <repo-url>
-cd philosiphai
+cd philosophai
 pip install .
 # Or with dev deps: pip install -e ".[dev]"
 ```
@@ -65,7 +103,7 @@ CLI options: `--resolution`, `--min-edge-weight`, `--resolution-sweep`, `--dry-r
 
 ```bash
 # From project root
-philosiphai-server
+philosophai-server
 # Or: uvicorn src.api.main:app --reload --port 8000
 ```
 
@@ -96,9 +134,9 @@ WebSocket endpoints are mounted under the same app for real-time agent interacti
 ## Project layout
 
 ```
-philosiphai/
+philosophai/
 ├── src/
-│   ├── api/          # FastAPI app, routes, WebSockets, rate limit, MCP server
+│   ├── api/          # FastAPI app, routes, WebSockets, rate limit
 │   ├── agents/       # Philosopher agent, tools, phases, multi-hopper, trace
 │   ├── config/       # Logging, env
 │   ├── graph/        # Graph build, communities, traversal, reports, conceptness
@@ -118,8 +156,8 @@ philosiphai/
 
 ## Development
 
-- **Tests**: `pytest` (config in `pyproject.toml`). Markers: `e2e`, `live_integration`, `thread_safety`, etc. For live integration, set `RUN_LIVE_INTEGRATION=1` and have `OPENAI_API_KEY` and `PHILOSOPH_DB` set.
-- **Linting/formatting**: `ruff`, `black` (see optional dev deps).
+- **Tests**: Default: `pytest`. CI and local “no secrets” runs: `pytest -m "not live_integration"`. For real OpenAI + DuckDB tests: set `RUN_LIVE_INTEGRATION=1`, `OPENAI_API_KEY`, and `PHILOSOPH_DB`. Markers are defined in `pyproject.toml`; only use a marker in config if at least one test references it.
+- **Formatting / lint**: Dev deps include `ruff` and `black`; repo-wide `black --check` / `ruff check` are not yet enforced in CI so existing files can be normalized in a follow-up.
 - **Local CORS**: Set `PHILOSOPH_ENV=development` in `.env` so default CORS allows localhost; override with `CORS_ORIGINS` if needed.
 
 ## Deployment
@@ -129,4 +167,4 @@ philosiphai/
 
 ## License
 
-Proprietary (see `pyproject.toml` and `LICENSE`).
+[MIT License](LICENSE) — see `pyproject.toml` for metadata.

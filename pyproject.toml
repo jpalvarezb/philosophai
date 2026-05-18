@@ -1,8 +1,8 @@
 [project]
-name = "philosiphai"
+name = "philosophai"
 version = "0.2.0"
 description = "Knowledge Graph RAG with Community Routing"
-license = { text = "Proprietary" }
+license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "duckdb>=1.0.0",
@@ -33,11 +33,12 @@ dev = [
     "httpx>=0.27.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
+    "pytest-cov>=4.0.0",
 ]
 
 [project.scripts]
-philosiphai-ingest = "src.ingest.cli:main"
-philosiphai-server = "src.api.main:main"
+philosophai-ingest = "src.ingest.cli:main"
+philosophai-server = "src.api.main:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]

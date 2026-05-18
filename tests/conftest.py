@@ -1,4 +1,15 @@
+import os
+
 import pytest
+
+
+def pytest_configure(config):
+    """
+    Burst concurrency tests reuse one ASGI client key and exceed normal limits.
+    Tests that validate rate-limiting behavior patch dependencies directly.
+    """
+    _ = config  # hookspec requires exact parameter name
+    os.environ["PHILOSOPH_RATE_LIMIT_REQUESTS"] = "0"
 
 
 @pytest.fixture

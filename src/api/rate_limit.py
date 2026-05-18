@@ -10,12 +10,18 @@ if TYPE_CHECKING:
     from starlette.requests import Request
     from starlette.websockets import WebSocket
 
-# Config: set PHILOSOPH_RATE_LIMIT_REQUESTS=0 to disable
-_RATE_LIMIT_REQUESTS = int(os.environ.get("PHILOSOPH_RATE_LIMIT_REQUESTS", "2"))
-_RATE_LIMIT_WINDOW_SEC = int(os.environ.get("PHILOSOPH_RATE_LIMIT_WINDOW_SECONDS", "60"))
+# PHILOSOPH_RATE_LIMIT_REQUESTS=0 disables. Limits are read at call-time so pytest/CI can override.
 
-_store: dict[str, tuple[int, float]] = {}  # client_key -> (count, window_start_ts)
 _lock = threading.Lock()
+_store: dict[str, tuple[int, float]] = {}  # client_key -> (count, window_start_ts)
+
+
+def _rate_limit_requests() -> int:
+    return int(os.environ.get("PHILOSOPH_RATE_LIMIT_REQUESTS", "2"))
+
+
+def _rate_limit_window_sec() -> int:
+    return int(os.environ.get("PHILOSOPH_RATE_LIMIT_WINDOW_SECONDS", "60"))
 
 
 def get_client_key(request: "Request") -> str:
@@ -38,17 +44,19 @@ def get_client_key_ws(websocket: "WebSocket") -> str:
 def record_request(client_key: str) -> bool:
     """
     Record one request for client_key. Returns True if under limit, False if over limit.
-    When disabled (RATE_LIMIT_REQUESTS <= 0), always returns True.
+    When disabled (requests limit <= 0), always returns True.
     """
-    if _RATE_LIMIT_REQUESTS <= 0:
+    limit = _rate_limit_requests()
+    if limit <= 0:
         return True
 
+    window = _rate_limit_window_sec()
     now = time.monotonic()
     with _lock:
         # Evict expired windows to avoid unbounded growth
         to_del = [
             k for k, (_, start) in _store.items()
-            if now - start >= _RATE_LIMIT_WINDOW_SEC
+            if now - start >= window
         ]
         for k in to_del:
             del _store[k]
@@ -58,23 +66,24 @@ def record_request(client_key: str) -> bool:
             return True
 
         count, start = _store[client_key]
-        if now - start >= _RATE_LIMIT_WINDOW_SEC:
+        if now - start >= window:
             _store[client_key] = (1, now)
             return True
 
         count += 1
         _store[client_key] = (count, start)
-        return count <= _RATE_LIMIT_REQUESTS
+        return count <= limit
 
 
 def get_retry_after_seconds(client_key: str) -> int:
     """Seconds until current window ends (for Retry-After header)."""
-    if _RATE_LIMIT_REQUESTS <= 0:
+    if _rate_limit_requests() <= 0:
         return 0
+    window = _rate_limit_window_sec()
     with _lock:
         if client_key not in _store:
             return 0
         _, start = _store[client_key]
         elapsed = time.monotonic() - start
-        remaining = max(0, int(_RATE_LIMIT_WINDOW_SEC - elapsed))
+        remaining = max(0, int(window - elapsed))
         return min(remaining, 60)  # Cap at 60 for header

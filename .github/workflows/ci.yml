@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install package and dev deps
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+          python -m spacy download en_core_web_sm
+
+      - name: Tests (excluding live_integration)
+        env:
+          OPENAI_API_KEY: ""
+          RUN_LIVE_INTEGRATION: ""
+          PHILOSOPH_DB: ""
+          PHILOSOPH_RATE_LIMIT_REQUESTS: "0"
+        run: |
+          pytest -m "not live_integration" \
+            --cov=src \
+            --cov-report=term-missing \
+            -ra

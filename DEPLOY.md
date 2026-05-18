@@ -40,7 +40,7 @@ fly secrets set CORS_ORIGINS="https://butlerian.xyz,https://www.butlerian.xyz"
 ```bash
 npm install && npm run dev
 ```
-Opens http://localhost:5713 and proxies `/api`, `/health`, etc. to `http://localhost:8000`. Start the backend separately (e.g. `philosiphai-server` or `uvicorn src.api.main:app --reload --port 8000`).
+Opens http://localhost:5713 and proxies `/api`, `/health`, etc. to `http://localhost:8000`. Start the backend separately (e.g. `philosophai-server` or `uvicorn src.api.main:app --reload --port 8000`).
 
 **CORS / env for local** – use development defaults (localhost allowed) by setting in `.env`:
 ```bash
@@ -53,7 +53,7 @@ To add more origins, set `CORS_ORIGINS` (comma-separated).
 
 ### Initial Deploy
 ```bash
-cd philosiphai
+cd philosophai
 
 # Create app
 fly apps create philo-butlerian
@@ -67,7 +67,7 @@ fly secrets set OPENAI_API_KEY="sk-..."
 # Deploy
 fly deploy
 
-# Add custom domain
+# Add custom domain (apex often redirects www; philo subdomain may also point at the app — add to CORS if you use it)
 fly certs create philo.butlerian.xyz
 ```
 

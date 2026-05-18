@@ -224,7 +224,6 @@ class CleaningAgent:
             response = self.llm_client.chat.completions.create(
                 model=self.model,
                 response_format={"type": "json_object"},
-                temperature=0.0,
                 messages=[
                     {"role": "system", "content": CLEANING_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},

@@ -9,7 +9,7 @@ from typing import Any
 
 DEFAULT_ENTITY_TYPES: dict[str, str] = {
     "Person": "Individual humans (Plato, Kant, Einstein)",
-    "Organization": "Groups, institutions, schools of thought (Stoicism, Vienna Circle, UNESCO)",
+    "Organization": "Named institutions, formal bodies, or established schools of thought (the Stoics, Vienna Circle, UNESCO, the Catholic Church). Do NOT use for generic groups of people (monks, brethren, clerics) — those are Person.",
     "Concept": "Abstract ideas, theories, principles, arguments (virtue, categorical imperative, entropy)",
     "Work": "Named documents, texts, publications (Republic, GDPR, Critique of Pure Reason)",
     "Event": "Named happenings, periods, movements (Enlightenment, French Revolution)",
@@ -78,14 +78,17 @@ class IngestConfig:
     chunk_overlap: int = 300
     chunk_method: str = "paragraph"
 
-    extraction_model: str = "gpt-5-mini"
-    extraction_api_base: str = "https://api.openai.com/v1"
+    extraction_model: str = "mistral:7b"
+    extraction_api_base: str = "http://127.0.0.1:11434/v1"
     extraction_api_key_env: str = "OPENAI_API_KEY"
     extraction_batch_size: int = 5
     extraction_max_workers: int = 6
     extraction_max_retries: int = 3
     extraction_retry_delay_seconds: float = 2.0
-    extraction_judge_batch_size: int = 25
+    extraction_judge_batch_size: int = 15
+    #: Per-request HTTP timeout for the OpenAI-compatible client (seconds). Use a large value (e.g.
+    #: 1800) for local Ollama + big JSON payloads; None = library default (often too low for 5-chunk batches).
+    extraction_http_timeout_seconds: float | None = None
 
     entity_types: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ENTITY_TYPES))
     entity_type_fallback: str = "Concept"
@@ -107,7 +110,7 @@ class IngestConfig:
 
     predicate_threshold: float = 0.88
     entity_threshold: float = 0.92
-    judge_model: str = "gpt-5-mini"
+    judge_model: str = "qwen3.5:9b"
 
     resolution: float = 0.8
     min_edge_weight: int = 1

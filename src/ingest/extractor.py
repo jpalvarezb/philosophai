@@ -39,6 +39,10 @@ INDEX_GLOSSARY_RE = re.compile(
     r"\bsee\s+also\b|\bsee\s+under\b|\bcf\.\s",
     re.IGNORECASE,
 )
+PLACEHOLDER_ENTITY_RE = re.compile(
+    r"^[_\s]*n(?:[._\s])*?$",
+    re.IGNORECASE,
+)
 
 PRONOUN_TOKENS = {
     "i",
@@ -117,15 +121,51 @@ Return a single JSON object with this exact structure:
 Valid entity types (assign exactly one per entity):
 {entity_type_block}
 
+Examples:
+- Example 1 (keep semantic claims):
+  Text:
+  "Horus is identified with the rising sun. The Bennu bird symbolizes rebirth."
+  Output triples:
+  - subject="Horus", subject_type="Person", predicate="is_identified_with", object="the rising sun", object_type="Concept"
+  - subject="Bennu bird", subject_type="Concept", predicate="symbolizes", object="rebirth", object_type="Concept"
+
+- Example 2 (reject structural/editorial references):
+  Text:
+  "Chapter XII is titled The Weighing of the Heart. Papyrus of Ani preserves this title."
+  Output triples:
+  - none (return empty triples list for this chunk)
+
+- Example 3 (reject unresolved pronoun speaker):
+  Text:
+  "I am the one who opens the gates of heaven."
+  Output triples:
+  - none (the speaker is not explicitly resolved to a concrete entity in the chunk)
+
+- Example 4 (reject vague "is" relation):
+  Text:
+  "The teaching is about order and law."
+  Output triples:
+  - none (the relation is too vague; no concrete semantic relation is expressed)
+
+- Example 5 (reject publication metadata):
+  Text:
+  "The Rule of St. Benedict was translated into English by W.K. Lowther Clarke and published in London."
+  Output triples:
+  - none (this is publication metadata, not intellectual content)
+
 Rules:
-- Subjects and objects must be concise noun phrases.
+- Subjects and objects must be concise noun phrases of 1–8 words. Do not extract full sentences, quotations, relative clauses, or verb phrases as entities.
 - Predicates must be short verb phrases in snake_case.
 - When uncertain about type, prefer {fallback}.
 - If a chunk has no usable triples, return an empty triples list for that chunk.
 - Extract only factual, definitional, or argumentative claims about concepts, persons, works, methods, places, events, organizations, or technologies.
 - Do NOT extract reader instructions, legal/license text, publication metadata, or structural references (chapter/section/table-of-contents/index lines).
 - Do NOT extract triples about chapter structure, section numbering, manuscript organization, rubrics, editorial apparatus, or document layout. These describe the document's structure, not its intellectual content.
+- Do NOT extract structural references such as Chapter/Section/Verse/Stanza/Folio numbering, title labels, or passage location markers.
 - Never use "Chapter X", "Section Y", "Part Z", or similar structural labels as subjects or objects.
+- Skip speculative or hedged claims (e.g., "might", "may", "perhaps", "seems", "appears", "likely", "unless perhaps").
+- If the subject or object is an unresolved pronoun/speaker reference ("I", "he", "they", "the speaker"), skip the triple unless the entity is explicitly named in the same chunk.
+- Prefer precise relational predicates grounded in explicit wording; avoid vague predicates like "is related to", "is about", "has", "says", or "is of" unless they are the only explicit factual relation.
 - Never use pronouns or single letters as subjects or objects.
 - Do not invent chunks or entities not grounded in the text."""
 
@@ -147,7 +187,11 @@ Return a single JSON object with this exact structure:
 Rules:
 - Keep only triples that are explicitly grounded in the chunk text.
 - Keep only triples that express semantic content, not document structure.
-- Reject triples about chapter structure, section numbering, table of contents, indexes, page layout, editorial apparatus, publication metadata, or legal text.
+- Reject triples about chapter structure, section numbering, table of contents, indexes, page layout, editorial apparatus, publication metadata (e.g., translators, publishers, publication locations), or legal text.
+- Reject numbered structural labels or headings used as entities, such as Chapter XII, Book III, Section 2, or Appendix B, when they refer to document structure rather than substantive content.
+- Reject claims about where a passage appears, what a chapter is titled, what another manuscript version contains, or which copy preserves a title. This includes predicates like "is_known_in" or "is_opened_in" pointing to Chapter numbers.
+- Do not reject a triple only because a work or manuscript is mentioned; keep it when the relation expresses substantive content rather than the text's organization or transmission history.
+- Reject unresolved role entities such as "the speaker", "the narrator", "the author", or similar role labels when they are not explicitly resolved to a concrete named entity in the chunk.
 - Reject triples whose subject or object is not a meaningful entity or concept in context.
 - Reject triples with malformed, vague, or non-relational predicates.
 - Prefer rejecting uncertain triples over keeping noisy ones.
@@ -285,11 +329,30 @@ class TripleExtractor:
         from openai import OpenAI
 
         api_key = os.environ.get(self.config.extraction_api_key_env)
-        if not api_key:
-            raise ValueError(
-                f"{self.config.extraction_api_key_env} environment variable is required for extraction"
+        base_url = self.config.extraction_api_base or ""
+        is_local_ollama = any(
+            token in base_url.lower()
+            for token in (
+                "127.0.0.1:11434",
+                "127.0.0.1",
+                "localhost:11434",
+                "localhost",
+                "ollama.com",
             )
-        return OpenAI(api_key=api_key, base_url=self.config.extraction_api_base)
+        )
+
+        if not api_key:
+            if "openai.com" in base_url.lower() or is_local_ollama:
+                api_key = api_key or "ollama"
+            else:
+                raise ValueError(
+                    f"{self.config.extraction_api_key_env} environment variable is required for extraction"
+                )
+
+        client_kwargs: dict[str, object] = {"api_key": api_key, "base_url": self.config.extraction_api_base}
+        if self.config.extraction_http_timeout_seconds is not None:
+            client_kwargs["timeout"] = float(self.config.extraction_http_timeout_seconds)
+        return OpenAI(**client_kwargs)
 
     @staticmethod
     def _format_seconds(seconds: float) -> str:
@@ -491,6 +554,10 @@ class TripleExtractor:
             return "structural_subject"
         if o_lower in STRUCTURAL_TOKENS:
             return "structural_object"
+        if PLACEHOLDER_ENTITY_RE.match(s_lower):
+            return "placeholder_subject"
+        if PLACEHOLDER_ENTITY_RE.match(o_lower):
+            return "placeholder_object"
         if SINGLE_LETTER_RE.match(s):
             return "single_letter_subject"
         if SINGLE_LETTER_RE.match(o):
@@ -499,6 +566,12 @@ class TripleExtractor:
             return "very_short_ascii_subject"
         if o.isascii() and o.isalpha() and len(o) <= 2:
             return "very_short_ascii_object"
+
+        MAX_ENTITY_WORDS = 8
+        if len(s.split()) > MAX_ENTITY_WORDS:
+            return "entity_too_long_subject"
+        if len(o.split()) > MAX_ENTITY_WORDS:
+            return "entity_too_long_object"
 
         combined = f"{s_lower} {p_lower} {o_lower}"
         if any(marker in combined for marker in LEGAL_MARKERS):
@@ -556,15 +629,20 @@ class TripleExtractor:
             result[chunk.chunk_id] = triples
         return result
 
-    def evaluate_candidates(self, candidates: Sequence[CandidateTriple]) -> dict[int, TripleEvaluation]:
+    def evaluate_candidates(
+        self,
+        candidates: Sequence[CandidateTriple],
+        *,
+        batch_size: int | None = None,
+    ) -> dict[int, TripleEvaluation]:
         """Run the evaluator model over extracted candidate triples."""
         if not candidates:
             return {}
 
         decisions: dict[int, TripleEvaluation] = {}
-        batch_size = max(1, int(self.config.extraction_judge_batch_size))
-        for start in range(0, len(candidates), batch_size):
-            judge_batch = candidates[start : start + batch_size]
+        effective_batch_size = max(1, int(batch_size or self.config.extraction_judge_batch_size))
+        for start in range(0, len(candidates), effective_batch_size):
+            judge_batch = candidates[start : start + effective_batch_size]
             response = self.llm_client.chat.completions.create(
                 model=self.config.judge_model,
                 messages=[
@@ -599,8 +677,14 @@ class TripleExtractor:
 
     def process_batch_task(
         self, batch: Sequence[ChunkRecord]
-    ) -> tuple[list[tuple], list[tuple], list[tuple], int, dict[str, int]]:
-        """Extract and evaluate triples for one batch with retries."""
+    ) -> tuple[list[tuple], list[tuple], list[tuple], int, dict[str, int], bool]:
+        """Extract and evaluate triples for one batch with retries.
+
+        The final bool is True when the batch completed successfully (including “no triples” after a
+        valid pipeline run). False means all retries failed — those chunks remain pending.
+        """
+        first_id = batch[0].chunk_id if batch else "-"
+        logger.info("Batch started: %d chunks (first_id=%s)", len(batch), first_id)
         last_error: Exception | None = None
         for attempt in range(self.config.extraction_max_retries):
             try:
@@ -664,10 +748,38 @@ class TripleExtractor:
                         next_triple_id += 1
 
                 decisions = self.evaluate_candidates(candidate_triples)
+                missing_candidates = [
+                    candidate for candidate in candidate_triples if candidate.triple_id not in decisions
+                ]
+                if missing_candidates:
+                    retry_decisions = self.evaluate_candidates(
+                        missing_candidates,
+                        batch_size=len(missing_candidates),
+                    )
+                    recovered = 0
+                    for triple_id, decision in retry_decisions.items():
+                        if triple_id not in decisions:
+                            decisions[triple_id] = decision
+                            recovered += 1
+                    if recovered:
+                        logger.info(
+                            "Evaluator retry recovered %d/%d missing decisions for batch",
+                            recovered,
+                            len(missing_candidates),
+                        )
+                    remaining_missing = [
+                        candidate for candidate in missing_candidates if candidate.triple_id not in decisions
+                    ]
+                    if remaining_missing:
+                        logger.warning(
+                            "Evaluator retry still missing %d/%d decisions for batch",
+                            len(remaining_missing),
+                            len(missing_candidates),
+                        )
                 for candidate in candidate_triples:
                     decision = decisions.get(candidate.triple_id)
                     if decision is None:
-                        rejection_counts["judge_missing_decision"] += 1
+                        rejection_counts["judge_missing_decision_after_retry"] += 1
                         rejection_rows.append(
                             (
                                 str(uuid.uuid4()),
@@ -680,7 +792,7 @@ class TripleExtractor:
                                 candidate.object_str,
                                 candidate.object_norm,
                                 "llm_judge",
-                                "missing evaluator decision",
+                                "missing evaluator decision after retry",
                                 self.config.judge_model,
                                 run_id,
                             )
@@ -730,7 +842,7 @@ class TripleExtractor:
                     entity_rows.append(
                         (candidate.object_norm, candidate.object_type, candidate.chunk_id, candidate.text_id, "object")
                     )
-                return triple_rows, entity_rows, rejection_rows, raw_triples_seen, dict(rejection_counts)
+                return triple_rows, entity_rows, rejection_rows, raw_triples_seen, dict(rejection_counts), True
             except (json.JSONDecodeError, ValidationError, Exception) as exc:  # noqa: BLE001
                 last_error = exc
                 if self._is_fatal_api_error(exc):
@@ -740,7 +852,11 @@ class TripleExtractor:
                     time.sleep(self.config.extraction_retry_delay_seconds)
         if last_error is not None:
             logger.error("Extraction/evaluation batch failed after retries: %s", last_error)
-        return [], [], [], 0, {}
+            logger.warning(
+                "Batch chunks remain pending (not written). For Ollama: use extraction_max_workers=1–2, "
+                "smaller extraction_batch_size (2–3), and extraction_http_timeout_seconds=1800+ in config."
+            )
+        return [], [], [], 0, {}, False
 
     def insert_triples(self, triple_rows: list[tuple], entity_rows: list[tuple]) -> None:
         """Insert extracted triples and provenance rows."""
@@ -800,9 +916,14 @@ class TripleExtractor:
             """
         )
 
-    def _preflight_model_check(self, model_name: str) -> None:
+    def _preflight_model_check(self, model_name: str, *, role: str) -> None:
         """Run a minimal API call to verify model access before bulk extraction."""
-        logger.info("Preflight check: model=%s base=%s", model_name, self.config.extraction_api_base)
+        logger.info(
+            "Preflight check (%s): model=%s base=%s",
+            role,
+            model_name,
+            self.config.extraction_api_base,
+        )
         try:
             self.llm_client.chat.completions.create(
                 model=model_name,
@@ -819,9 +940,11 @@ class TripleExtractor:
 
     def _preflight_check(self) -> None:
         """Run minimal API calls to verify extraction and judge model access."""
-        self._preflight_model_check(self.config.extraction_model)
+        self._preflight_model_check(self.config.extraction_model, role="extraction")
         if self.config.judge_model != self.config.extraction_model:
-            self._preflight_model_check(self.config.judge_model)
+            self._preflight_model_check(self.config.judge_model, role="judge")
+        else:
+            logger.info("Preflight: judge_model same as extraction_model — single model check only")
 
     def extract_pending(
         self,
@@ -888,12 +1011,18 @@ class TripleExtractor:
             selected_pending_chunks,
             self.config.extraction_batch_size,
         )
-
         batches = [
             extractable_chunks[i : i + self.config.extraction_batch_size]
             for i in range(0, len(extractable_chunks), self.config.extraction_batch_size)
         ]
         total_batches = len(batches)
+        logger.info(
+            "Queued %d batch jobs (extraction_max_workers=%d). "
+            "Progress logs appear after each batch completes; the first batch often takes several minutes "
+            "with local Ollama — reduce extraction_max_workers to 1–2 if requests queue or stall.",
+            total_batches,
+            self.config.extraction_max_workers,
+        )
         progress_interval = max(1, min(25, total_batches // 20 or 1))
         total_triples = 0
         total_entities = 0
@@ -901,11 +1030,14 @@ class TripleExtractor:
         rejection_counts: Counter[str] = Counter()
         completed_batches = 0
         completed_chunks = 0
+        failed_batches = 0
         started_at = time.perf_counter()
         with ThreadPoolExecutor(max_workers=self.config.extraction_max_workers) as executor:
             futures = {executor.submit(self.process_batch_task, batch): batch for batch in batches}
             for future in as_completed(futures):
-                triple_rows, entity_rows, rejection_rows, batch_raw_triples, batch_rejections = future.result()
+                triple_rows, entity_rows, rejection_rows, batch_raw_triples, batch_rejections, batch_ok = (
+                    future.result()
+                )
                 batch = futures[future]
                 self.insert_triples(triple_rows, entity_rows)
                 self.insert_rejections(rejection_rows)
@@ -914,7 +1046,10 @@ class TripleExtractor:
                 raw_triples_seen += batch_raw_triples
                 rejection_counts.update(batch_rejections)
                 completed_batches += 1
-                completed_chunks += len(batch)
+                if batch_ok:
+                    completed_chunks += len(batch)
+                else:
+                    failed_batches += 1
 
                 should_log_progress = (
                     completed_batches == 1
@@ -929,14 +1064,15 @@ class TripleExtractor:
                     eta_seconds = remaining_chunks / chunks_per_second if chunks_per_second > 0 else 0.0
                     logger.info(
                         (
-                            "Extraction progress: %d/%d chunks (%.1f%%), %d/%d batches, "
-                            "%d triples, %.2f chunks/s, %.2f triples/s, elapsed=%s, eta=%s"
+                            "Extraction progress: %d/%d chunks done (%.1f%%), %d/%d batches, "
+                            "%d batch failures, %d triples, %.2f chunks/s, %.2f triples/s, elapsed=%s, eta=%s"
                         ),
                         completed_chunks,
                         len(extractable_chunks),
-                        100.0 * completed_chunks / len(extractable_chunks),
+                        100.0 * completed_chunks / max(1, len(extractable_chunks)),
                         completed_batches,
                         total_batches,
+                        failed_batches,
                         total_triples,
                         chunks_per_second,
                         triples_per_second,
